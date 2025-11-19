@@ -22,6 +22,7 @@ type loginResp struct {
 	UserID    string `json:"user_id"` // public id
 	Role      string `json:"role"`
 	ExpiresAt int64  `json:"expires_at"`
+	Username	string `json:"username"`
 }
 
 type loginClaims struct {
@@ -77,10 +78,11 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, loginResp{
-		Token:     signed,
-		UserID:    u.PublicID,
-		Role:      string(u.Role),
-		ExpiresAt: exp.Unix(),
+c.JSON(http.StatusOK, loginResp{
+	Token:     signed,
+	UserID:    u.PublicID,
+	Role:      string(u.Role),
+	ExpiresAt: exp.Unix(),
+	Username:  u.Username,
 	})
 }

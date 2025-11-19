@@ -20,7 +20,6 @@ func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
 func SiswaGetReceiptPDF(c *gin.Context) { siswapkg.SiswaGetReceiptPDF(c) }
 
 // --- admin / stan ---
-func RegisterStan(c *gin.Context)            { adminpkg.RegisterStan(c) }
 func AdminCreateMenu(c *gin.Context)         { adminpkg.AdminCreateMenu(c) }
 func AdminUpdateMenu(c *gin.Context)         { adminpkg.AdminUpdateMenu(c) }
 func AdminDeleteMenu(c *gin.Context)         { adminpkg.AdminDeleteMenu(c) }
@@ -28,3 +27,4 @@ func AdminListMenus(c *gin.Context)          { adminpkg.AdminListMenus(c) }
 func AdminUpdateOrderStatus(c *gin.Context)  { adminpkg.AdminUpdateOrderStatus(c) }
 func AdminOrdersByMonth(c *gin.Context)      { adminpkg.AdminOrdersByMonth(c) }
 func AdminMonthlyReport(c *gin.Context)      { adminpkg.AdminMonthlyReport(c) }
+func RegisterStan(c *gin.Context)            { adminpkg.RegisterStan(c) }

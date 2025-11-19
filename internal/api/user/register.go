@@ -50,5 +50,7 @@ func RegisterUser(c *gin.Context) {
 		"message":  "register siswa success",
 		"user_id":  user.PublicID,
 		"siswa_id": siswa.PublicID,
+		"nama":     siswa.Nama,
+		"username": user.Username,
 	})
 }
