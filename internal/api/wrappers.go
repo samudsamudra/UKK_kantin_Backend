@@ -18,6 +18,8 @@ func SiswaListMenus(c *gin.Context)     { siswapkg.SiswaListMenus(c) }
 func SiswaCreateOrder(c *gin.Context)   { siswapkg.SiswaCreateOrder(c) }
 func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
 func SiswaGetReceiptPDF(c *gin.Context) { siswapkg.SiswaGetReceiptPDF(c) }
+func SiswaGetMenu(c *gin.Context) { siswapkg.SiswaGetMenu(c) }
+
 
 // --- admin / stan (menus) ---
 func AdminCreateMenu(c *gin.Context) { adminpkg.AdminCreateMenu(c) }

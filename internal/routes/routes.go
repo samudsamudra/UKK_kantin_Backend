@@ -68,6 +68,7 @@ func Register(r *gin.Engine) {
 	{
 		// public: list menu (browse)
 		siswa.GET("/menus", api.SiswaListMenus)
+		siswa.GET("/menus/:id", api.SiswaGetMenu)
 
 		// protected siswa actions
 		siswaAuth := siswa.Group("")
