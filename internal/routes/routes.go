@@ -55,7 +55,7 @@ func Register(r *gin.Engine) {
 	apiGroup := r.Group("/api")
 
 	// global small protections
-	apiGroup.Use(requireJSON(1<<20))          // max 1MiB payload for JSON endpoints
+	apiGroup.Use(requireJSON(1<<20))                   // max 1MiB payload for JSON endpoints
 	apiGroup.Use(simpleRateLimiter(200, time.Minute)) // protect from spam (global gentle limit)
 
 	// AUTH & USER (public registration/login but rate-limited)
@@ -96,7 +96,18 @@ func Register(r *gin.Engine) {
 		adminAuth.PUT("/menus/:id", api.AdminUpdateMenu)
 		adminAuth.DELETE("/menus/:id", api.AdminDeleteMenu)
 		adminAuth.GET("/menus", api.AdminListMenus)
+		adminAuth.GET("/menus/:id", api.AdminGetMenu)
 
+		// discounts CRUD
+		adminAuth.PATCH("/discounts", api.AdminCreateDiscount)
+		adminAuth.GET("/discounts", api.AdminListDiscounts)
+		adminAuth.GET("/discounts/:id", api.AdminGetDiscount)
+		adminAuth.PUT("/discounts/:id", api.AdminUpdateDiscount)
+		adminAuth.DELETE("/discounts/:id", api.AdminDeleteDiscount)
+		adminAuth.PATCH("/discounts/:id/menus", func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+		})
+		
 		// orders - admin confirms/updates status
 		adminAuth.PATCH("/orders/:id/status", api.AdminUpdateOrderStatus)
 		adminAuth.GET("/orders", api.AdminOrdersByMonth)

@@ -10,18 +10,21 @@ import (
 // --- enums ---
 
 type UserRole string
+
 const (
 	RoleSiswa     UserRole = "siswa"
 	RoleAdminStan UserRole = "admin_stan"
 )
 
 type MenuJenis string
+
 const (
 	JenisMakanan MenuJenis = "makanan"
 	JenisMinuman MenuJenis = "minuman"
 )
 
 type TransaksiStatus string
+
 const (
 	StatusBelumDikonfirm TransaksiStatus = "belum dikonfirm"
 	StatusDimasak        TransaksiStatus = "dimasak"
@@ -54,13 +57,13 @@ func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
 // --- SISWA ---
 
 type Siswa struct {
-	ID        uint      `gorm:"primaryKey" json:"-"`
-	PublicID  string    `gorm:"size:36;uniqueIndex;not null" json:"siswa_id"`
-	Nama      string    `gorm:"size:100;not null" json:"nama_siswa"`
-	Alamat    string    `gorm:"type:text" json:"alamat"`
-	Telp      string    `gorm:"size:20" json:"telp"`
-	Foto      string    `gorm:"size:255" json:"foto"`
-	UserID    *uint     `gorm:"uniqueIndex" json:"-"`
+	ID        uint   `gorm:"primaryKey" json:"-"`
+	PublicID  string `gorm:"size:36;uniqueIndex;not null" json:"siswa_id"`
+	Nama      string `gorm:"size:100;not null" json:"nama_siswa"`
+	Alamat    string `gorm:"type:text" json:"alamat"`
+	Telp      string `gorm:"size:20" json:"telp"`
+	Foto      string `gorm:"size:255" json:"foto"`
+	UserID    *uint  `gorm:"uniqueIndex" json:"-"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -75,12 +78,12 @@ func (s *Siswa) BeforeCreate(tx *gorm.DB) (err error) {
 // --- STAN ADMIN ---
 
 type Stan struct {
-	ID          uint      `gorm:"primaryKey" json:"-"`
-	PublicID    string    `gorm:"size:36;uniqueIndex;not null" json:"stan_id"`
-	NamaStan    string    `gorm:"size:100;not null" json:"nama_stan"`
-	NamaPemilik string    `gorm:"size:100" json:"nama_pemilik"`
-	Telp        string    `gorm:"size:20" json:"telp"`
-	UserID      *uint     `gorm:"uniqueIndex" json:"-"`
+	ID          uint   `gorm:"primaryKey" json:"-"`
+	PublicID    string `gorm:"size:36;uniqueIndex;not null" json:"stan_id"`
+	NamaStan    string `gorm:"size:100;not null" json:"nama_stan"`
+	NamaPemilik string `gorm:"size:100" json:"nama_pemilik"`
+	Telp        string `gorm:"size:20" json:"telp"`
+	UserID      *uint  `gorm:"uniqueIndex" json:"-"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 
@@ -120,13 +123,14 @@ func (m *Menu) BeforeCreate(tx *gorm.DB) (err error) {
 
 // --- DISKON ---
 
+// internal/app/models.go (potongan)
 type Diskon struct {
 	ID               uint       `gorm:"primaryKey" json:"-"`
 	PublicID         string     `gorm:"size:36;uniqueIndex;not null" json:"diskon_id"`
 	NamaDiskon       string     `gorm:"size:100;not null" json:"nama_diskon"`
-	PersentaseDiskon float64    `json:"persentase_diskon"`
-	TanggalAwal      *time.Time `json:"tanggal_awal"`
-	TanggalAkhir     *time.Time `json:"tanggal_akhir"`
+	PersentaseDiskon float64    `json:"persentase_diskon"`                                     // 0..100
+	TanggalAwal      *time.Time `gorm:"index:idx_diskon_time,priority:1" json:"tanggal_awal"`  // nil = always active (opsional)
+	TanggalAkhir     *time.Time `gorm:"index:idx_diskon_time,priority:2" json:"tanggal_akhir"` // nil = no end
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 
@@ -150,12 +154,12 @@ type MenuDiskon struct {
 // --- TRANSAKSI ---
 
 type Transaksi struct {
-	ID        uint             `gorm:"primaryKey" json:"-"`
-	PublicID  string           `gorm:"size:36;uniqueIndex;not null" json:"transaksi_id"`
-	Tanggal   time.Time        `gorm:"not null;index" json:"tanggal"`
-	StanID    uint             `gorm:"index;not null" json:"-"`
-	SiswaID   uint             `gorm:"index;not null" json:"-"`
-	Status    TransaksiStatus  `gorm:"size:50;not null" json:"status"`
+	ID        uint            `gorm:"primaryKey" json:"-"`
+	PublicID  string          `gorm:"size:36;uniqueIndex;not null" json:"transaksi_id"`
+	Tanggal   time.Time       `gorm:"not null;index" json:"tanggal"`
+	StanID    uint            `gorm:"index;not null" json:"-"`
+	SiswaID   uint            `gorm:"index;not null" json:"-"`
+	Status    TransaksiStatus `gorm:"size:50;not null" json:"status"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 

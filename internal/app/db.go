@@ -77,9 +77,12 @@ func RunMigrations() {
 		&MenuDiskon{},
 		&Transaksi{},
 		&DetailTransaksi{},
+		&MenuDiskon{},
 	)
 	if err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
 	log.Println("migrations completed")
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_diskon_time ON diskons (tanggal_awal, tanggal_akhir)")
 }
+
