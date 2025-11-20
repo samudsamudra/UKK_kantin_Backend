@@ -97,7 +97,6 @@ func SiswaTopupByAdmin(c *gin.Context) {
 
 // POST /api/siswa/order
 // NOTE: ensure this is the only SiswaCreateOrder in package siswa (remove/replace duplicates)
-// POST /api/siswa/order
 func SiswaCreateOrder(c *gin.Context) {
 	// debug useful: show ctx keys if things go wrong
 	if v := c.Keys; v != nil {
@@ -126,26 +125,35 @@ func SiswaCreateOrder(c *gin.Context) {
 	if idemp != "" {
 		var ik app.IdempotencyKey
 		if err := app.DB.Where("`key` = ? AND user_id = ?", idemp, user.ID).First(&ik).Error; err == nil {
-			// existing key
+			// case A: idempotency key already points to an existing transaksi -> return OK with that transaksi
 			if ik.TransaksiID != nil {
 				var trx app.Transaksi
 				if err := app.DB.Preload("Details").Where("id = ?", *ik.TransaksiID).First(&trx).Error; err == nil {
-					c.JSON(http.StatusConflict, gin.H{"message": "duplicate request", "transaksi_id": trx.PublicID})
+					c.JSON(http.StatusOK, gin.H{"message": "duplicate request", "transaksi_id": trx.PublicID})
 					return
 				}
+				// fallback: cannot resolve transaksi -> continue to in-progress handling
 			}
-			c.JSON(http.StatusConflict, gin.H{"error": "request in progress or duplicate idempotency key"})
-			return
+
+			// case B: key exists but transaksi_id nil -> request IN-PROGRESS
+			// if the key is very old, consider it stale -> delete and continue as new request
+			if time.Since(ik.CreatedAt) > 5*time.Minute {
+				_ = app.DB.Where("`key` = ? AND user_id = ?", idemp, user.ID).Delete(&app.IdempotencyKey{}).Error
+			} else {
+				// instead of 409, return 202 Accepted to be friendlier (request is being processed)
+				c.JSON(http.StatusAccepted, gin.H{"message": "request in progress"})
+				return
+			}
 		}
+
 		ikNew := app.IdempotencyKey{
 			Key:       idemp,
 			UserID:    user.ID,
 			CreatedAt: time.Now(),
 		}
+		// ignore duplicate-key error here; next request will handle it
 		if err := app.DB.Create(&ikNew).Error; err != nil {
-			// log actual error (might be duplicate key, constraint, etc)
 			log.Printf("[SiswaCreateOrder] failed to create idempotency key: %v (key=%s user=%d)", err, idemp, user.ID)
-			// do NOT abort — continue but log; if duplicate it will be handled above on next request
 		}
 	}
 
@@ -212,7 +220,7 @@ func SiswaCreateOrder(c *gin.Context) {
 			pct = 0
 		}
 
-		hargaBeli := round2(menu.Harga * (1 - pct/100.0))
+		hargaBeli := app.Round2(menu.Harga * (1 - pct/100.0))
 		if hargaBeli < 0 {
 			hargaBeli = 0
 		}
@@ -346,11 +354,11 @@ func SiswaCreateOrder(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[SiswaCreateOrder] success transaksi_public_id=%s user=%d total=%.2f", trx.PublicID, user.ID, round2(total))
+	log.Printf("[SiswaCreateOrder] success transaksi_public_id=%s user=%d total=%.2f", trx.PublicID, user.ID, app.Round2(total))
 	c.JSON(http.StatusCreated, gin.H{
 		"transaksi_id": trx.PublicID,
 		"status":       trx.Status,
-		"total":        round2(total),
+		"total":        app.Round2(total),
 	})
 }
 

@@ -3,7 +3,8 @@ package admin
 import (
 	"net/http"
 	"time"
-
+	"fmt"
+	"strings"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/samudsamudra/UKK_kantin/internal/app"
@@ -29,15 +30,38 @@ type updateDiscountPayload struct {
 
 // helper: parse optional RFC3339 to *time.Time
 func parseOptionalTime(s *string) (*time.Time, error) {
-	if s == nil || *s == "" {
+	if s == nil {
 		return nil, nil
 	}
-	t, err := time.Parse(time.RFC3339, *s)
-	if err != nil {
-		return nil, err
+	str := strings.TrimSpace(*s)
+	if str == "" {
+		return nil, nil
 	}
-	tt := t.UTC()
-	return &tt, nil
+
+	// try RFC3339 (best)
+	if t, err := time.Parse(time.RFC3339, str); err == nil {
+		tt := t.UTC()
+		return &tt, nil
+	}
+
+	// assume local Jakarta if no timezone present
+	loc, _ := time.LoadLocation("Asia/Jakarta")
+
+	// try "2006-01-02 15:04"
+	layouts := []string{
+		"2006-01-02 15:04",
+		"2006-01-02",
+		"02-01-2006",
+	}
+
+	for _, l := range layouts {
+		if t, err := time.ParseInLocation(l, str, loc); err == nil {
+			tt := t.UTC()
+			return &tt, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported date format")
 }
 
 // ----------------------

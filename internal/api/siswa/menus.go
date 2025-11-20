@@ -2,9 +2,7 @@ package siswa
 
 import (
 	"log"
-	"math"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -37,8 +35,8 @@ func SiswaListMenus(c *gin.Context) {
 	}
 
 	out := make([]gin.H, 0, len(menus))
-
 	for _, m := range menus {
+		// fetch applicable discounts for this menu
 		var diskons []app.Diskon
 		if err := db.
 			Model(&app.Diskon{}).
@@ -49,46 +47,57 @@ func SiswaListMenus(c *gin.Context) {
 			log.Printf("[SiswaListMenus] error querying discounts for menu %s: %v", m.PublicID, err)
 		}
 
-		latest := pickLatestApplicableDiscount(diskons)
-
-		var pct float64
-		var diskonInfo gin.H
-		if latest != nil {
-			pct = latest.PersentaseDiskon
-			var tAwal, tAkhir *string
-			if latest.TanggalAwal != nil {
-				s := latest.TanggalAwal.UTC().Format(time.RFC3339)
-				tAwal = &s
+		// pick latest applicable discount via helper
+		var discountObj gin.H = nil
+		var latest *app.Diskon = nil
+		if len(diskons) > 0 {
+			latest = pickLatestApplicableDiscount(diskons)
+			if latest != nil {
+				discountObj = gin.H{
+					"id":           latest.PublicID,
+					"name":         latest.NamaDiskon,
+					"percent":      latest.PersentaseDiskon,
+					"start":        app.FormatISOOrNil(latest.TanggalAwal),
+					"start_pretty": app.FormatTimePretty(latest.TanggalAwal),
+					"end":          app.FormatISOOrNil(latest.TanggalAkhir),
+					"end_pretty":   app.FormatTimePretty(latest.TanggalAkhir),
+				}
 			}
-			if latest.TanggalAkhir != nil {
-				s := latest.TanggalAkhir.UTC().Format(time.RFC3339)
-				tAkhir = &s
-			}
-			diskonInfo = gin.H{
-				"diskon_id":         latest.PublicID,
-				"nama_diskon":       latest.NamaDiskon,
-				"persentase_diskon": latest.PersentaseDiskon,
-				"tanggal_awal":      tAwal,
-				"tanggal_akhir":     tAkhir,
-			}
-		} else {
-			pct = 0
-			diskonInfo = nil
 		}
 
-		hargaAkhir := round2(m.Harga * (1 - pct/100.0))
+		// compute final price using latest struct (if any)
+		priceFinal := app.Round2(m.Harga)
+		if latest != nil && latest.PersentaseDiskon > 0 {
+			priceFinal = app.Round2(m.Harga * (1 - latest.PersentaseDiskon/100.0))
+		}
+
+		stanID := ""
+		stanName := ""
+		if m.StanID != nil {
+			stanID = getStanPublicIDByID(*m.StanID)
+			stanName = getStanNameByID(*m.StanID)
+		}
 
 		out = append(out, gin.H{
-			"menu_id":            m.PublicID,
-			"nama_makanan":       m.NamaMakanan,
-			"harga_asli":         round2(m.Harga),
-			"persentase_diskon":  pct,
-			"harga_akhir":        hargaAkhir,
-			"jenis":              m.Jenis,
-			"deskripsi":          m.Deskripsi,
-			"stan_id":            func() string { if m.StanID == nil { return "" }; return getStanPublicIDByID(*m.StanID) }(),
-			"stan_name":          func() string { if m.StanID == nil { return "" }; return getStanNameByID(*m.StanID) }(),
-			"diskon":             diskonInfo,
+			"id":          m.PublicID,
+			"name":        m.NamaMakanan,
+			"description": m.Deskripsi,
+			"type":        m.Jenis,
+
+			"price":       app.Round2(m.Harga),
+			"price_final": priceFinal,
+
+			"discount": discountObj, // nil if none
+
+			"stan": gin.H{
+				"id":   stanID,
+				"name": stanName,
+			},
+
+			"created_at":       m.CreatedAt,
+			"created_at_real-time": app.FormatTimeHuman(m.CreatedAt),
+			"updated_at":       m.UpdatedAt,
+			"updated_at_real-time": app.FormatTimeHuman(m.UpdatedAt),
 		})
 	}
 
@@ -113,6 +122,7 @@ func SiswaGetMenu(c *gin.Context) {
 		return
 	}
 
+	// fetch applicable discounts
 	var diskons []app.Diskon
 	if err := app.DB.
 		Model(&app.Diskon{}).
@@ -123,80 +133,47 @@ func SiswaGetMenu(c *gin.Context) {
 		log.Printf("[SiswaGetMenu] error querying discounts for menu %s: %v", m.PublicID, err)
 	}
 
-	latest := pickLatestApplicableDiscount(diskons)
-
-	var pct float64
-	var diskonInfo gin.H
-	if latest != nil {
-		pct = latest.PersentaseDiskon
-		var tAwal, tAkhir *string
-		if latest.TanggalAwal != nil {
-			s := latest.TanggalAwal.UTC().Format(time.RFC3339)
-			tAwal = &s
+	var discountObj gin.H = nil
+	var latest *app.Diskon = nil
+	if len(diskons) > 0 {
+		latest = pickLatestApplicableDiscount(diskons)
+		if latest != nil {
+			discountObj = gin.H{
+				"id":           latest.PublicID,
+				"name":         latest.NamaDiskon,
+				"percent":      latest.PersentaseDiskon,
+				"start":        app.FormatISOOrNil(latest.TanggalAwal),
+				"start_pretty": app.FormatTimePretty(latest.TanggalAwal),
+				"end":          app.FormatISOOrNil(latest.TanggalAkhir),
+				"end_pretty":   app.FormatTimePretty(latest.TanggalAkhir),
+			}
 		}
-		if latest.TanggalAkhir != nil {
-			s := latest.TanggalAkhir.UTC().Format(time.RFC3339)
-			tAkhir = &s
-		}
-		diskonInfo = gin.H{
-			"diskon_id":         latest.PublicID,
-			"nama_diskon":       latest.NamaDiskon,
-			"persentase_diskon": latest.PersentaseDiskon,
-			"tanggal_awal":      tAwal,
-			"tanggal_akhir":     tAkhir,
-		}
-	} else {
-		pct = 0
-		diskonInfo = nil
 	}
 
-	hargaAkhir := round2(m.Harga * (1 - pct/100.0))
+	priceFinal := app.Round2(m.Harga)
+	if latest != nil && latest.PersentaseDiskon > 0 {
+		priceFinal = app.Round2(m.Harga * (1 - latest.PersentaseDiskon/100.0))
+	}
+
+	stanID := ""
+	stanName := ""
+	if m.StanID != nil {
+		stanID = getStanPublicIDByID(*m.StanID)
+		stanName = getStanNameByID(*m.StanID)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"menu_id":           m.PublicID,
-		"nama_makanan":      m.NamaMakanan,
-		"harga_asli":        round2(m.Harga),
-		"persentase_diskon": pct,
-		"harga_akhir":       hargaAkhir,
-		"jenis":             m.Jenis,
-		"deskripsi":         m.Deskripsi,
-		"stan_id":           func() string { if m.StanID == nil { return "" }; return getStanPublicIDByID(*m.StanID) }(),
-		"stan_name":         func() string { if m.StanID == nil { return "" }; return getStanNameByID(*m.StanID) }(),
-		"diskon":            diskonInfo,
+		"id":               m.PublicID,
+		"name":             m.NamaMakanan,
+		"description":      m.Deskripsi,
+		"type":             m.Jenis,
+		"price":            app.Round2(m.Harga),
+		"price_final":      priceFinal,
+		"discount":         discountObj,
+		"stan":             gin.H{"id": stanID, "name": stanName},
+		"created_at":       m.CreatedAt,
+		"created_at_real-time": app.FormatTimeHuman(m.CreatedAt),
+		"updated_at":       m.UpdatedAt,
+		"updated_at_real-time": app.FormatTimeHuman(m.UpdatedAt),
 	})
-}
-
-func pickLatestApplicableDiscount(diskons []app.Diskon) *app.Diskon {
-	var best *app.Diskon
-	for i := range diskons {
-		d := &diskons[i]
-		// defensive: skip discounts outside date window (should already be filtered by DB)
-		now := time.Now().UTC()
-		if d.TanggalAwal != nil && now.Before(*d.TanggalAwal) {
-			continue
-		}
-		if d.TanggalAkhir != nil && now.After(*d.TanggalAkhir) {
-			continue
-		}
-		if best == nil || d.CreatedAt.After(best.CreatedAt) || (d.CreatedAt.Equal(best.CreatedAt) && d.PersentaseDiskon > best.PersentaseDiskon) {
-			best = d
-		}
-	}
-	return best
-}
-
-func round2(f float64) float64 {
-	return math.Round(f*100) / 100
-}
-
-func getStanPublicIDByID(id uint) string {
-	var pub string
-	app.DB.Table("stans").Select("public_id").Where("id = ?", id).Scan(&pub)
-	return pub
-}
-
-func getStanNameByID(id uint) string {
-	var name string
-	app.DB.Table("stans").Select("nama_stan").Where("id = ?", id).Scan(&name)
-	return name
 }
