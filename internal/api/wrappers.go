@@ -7,6 +7,7 @@ import (
 	authpkg "github.com/samudsamudra/UKK_kantin/internal/api/auth"
 	siswapkg "github.com/samudsamudra/UKK_kantin/internal/api/siswa"
 	userpkg "github.com/samudsamudra/UKK_kantin/internal/api/user"
+
 )
 
 // --- auth / user ---
@@ -16,8 +17,8 @@ func Login(c *gin.Context)        { authpkg.Login(c) }
 // --- siswa ---
 func SiswaListMenus(c *gin.Context)     { siswapkg.SiswaListMenus(c) }
 func SiswaCreateOrder(c *gin.Context)   { siswapkg.SiswaCreateOrder(c) }
-func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
-func SiswaGetReceiptPDF(c *gin.Context) { siswapkg.SiswaGetReceiptPDF(c) }
+// func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
+// func SiswaGetReceiptPDF(c *gin.Context) { siswapkg.SiswaGetReceiptPDF(c) }
 func SiswaGetMenu(c *gin.Context) { siswapkg.SiswaGetMenu(c) }
 
 
@@ -40,5 +41,9 @@ func AdminUpdateOrderStatus(c *gin.Context) { adminpkg.AdminUpdateOrderStatus(c)
 func AdminOrdersByMonth(c *gin.Context)     { adminpkg.AdminOrdersByMonth(c) }
 func AdminMonthlyReport(c *gin.Context)     { adminpkg.AdminMonthlyReport(c) }
 
+
 // --- admin / stan (stan management) ---
 func RegisterStan(c *gin.Context) { adminpkg.RegisterStan(c) }
+
+func SiswaGetWallet(c *gin.Context) { siswapkg.SiswaGetWallet(c) }
+func SiswaTopupByAdmin(c *gin.Context) { siswapkg.SiswaTopupByAdmin(c) }

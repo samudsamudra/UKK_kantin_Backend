@@ -40,6 +40,7 @@ type User struct {
 	Username  string    `gorm:"size:100;uniqueIndex;not null" json:"username"`
 	Password  string    `gorm:"size:255;not null" json:"-"`
 	Role      UserRole  `gorm:"size:50;not null" json:"role"`
+	Saldo     float64   `gorm:"type:decimal(15,2);default:0" json:"saldo"` // ADDED: wallet balance
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -188,4 +189,25 @@ type DetailTransaksi struct {
 	UpdatedAt   time.Time
 
 	Menu Menu `gorm:"foreignKey:MenuID"`
+}
+
+// WalletTransaction records top-up / debit operations for auditing.
+type WalletTransaction struct {
+	ID        uint      `gorm:"primaryKey" json:"-"`
+	PublicID  string    `gorm:"size:36;uniqueIndex;not null" json:"wallet_tx_id"`
+	UserID    uint      `gorm:"index;not null" json:"-"`
+	Amount    float64   `gorm:"not null" json:"amount"`          // positive for credit, negative for debit
+	Type      string    `gorm:"size:50;not null" json:"type"`    // "topup" | "debit" | "refund"
+	Note      string    `gorm:"type:text" json:"note,omitempty"` // free text
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Idempotency key table to avoid duplicate orders
+type IdempotencyKey struct {
+	// composite primary key: (key, user_id) -> idempotency is per-user
+	Key         string    `gorm:"size:191;primaryKey" json:"-"`
+	UserID      uint      `gorm:"primaryKey" json:"-"`
+	TransaksiID *uint     `gorm:"index" json:"-"`
+	Response    string    `gorm:"type:text" json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
 }

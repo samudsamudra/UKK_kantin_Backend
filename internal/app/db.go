@@ -19,7 +19,7 @@ func InitDB() {
 		log.Fatal("DB_DSN is not set")
 	}
 
-	// try connect directly
+	// Try direct connect first (normal startup)
 	db, err := gorm.Open(gormMySQL.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -29,8 +29,7 @@ func InitDB() {
 		return
 	}
 
-	// if failed, attempt to create database if unknown
-	// parse DSN using go-sql-driver/mysql to extract DB name
+	// If failed → maybe DB does not exist yet → attempt create DB
 	cfg, perr := goMySQL.ParseDSN(dsn)
 	if perr != nil {
 		log.Fatalf("invalid DSN: %v", perr)
@@ -40,7 +39,7 @@ func InitDB() {
 		log.Fatalf("DSN has no database name: %s", dsn)
 	}
 
-	// connect without DB name
+	// Connect without database name
 	cfg.DBName = ""
 	dsnNoDB := cfg.FormatDSN()
 	sqlDB, err := sql.Open("mysql", dsnNoDB)
@@ -55,11 +54,14 @@ func InitDB() {
 	}
 	log.Printf("database %s ensured", dbName)
 
-	// try connect again with gorm
-	db, err = gorm.Open(gormMySQL.Open(dsn), &gorm.Config{})
+	// Try connect again using GORM
+	db, err = gorm.Open(gormMySQL.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		log.Fatalf("failed to connect database after creating: %v", err)
 	}
+
 	DB = db
 	log.Println("database connected")
 }
@@ -68,6 +70,7 @@ func RunMigrations() {
 	if DB == nil {
 		log.Fatal("DB is nil; InitDB must be called first")
 	}
+
 	err := DB.AutoMigrate(
 		&User{},
 		&Siswa{},
@@ -77,12 +80,18 @@ func RunMigrations() {
 		&MenuDiskon{},
 		&Transaksi{},
 		&DetailTransaksi{},
-		&MenuDiskon{},
+		&WalletTransaction{},
+		&IdempotencyKey{},
 	)
 	if err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
-	log.Println("migrations completed")
-	DB.Exec("CREATE INDEX IF NOT EXISTS idx_diskon_time ON diskons (tanggal_awal, tanggal_akhir)")
-}
 
+	log.Println("migrations completed")
+
+	// Ensure index for diskon date-range
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_diskon_time ON diskons (tanggal_awal, tanggal_akhir)")
+
+	// Ensure index for idempotency transaksi lookup
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_idemp_transaksi ON idempotency_keys (transaksi_id)")
+}
