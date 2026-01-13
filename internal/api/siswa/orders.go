@@ -27,7 +27,7 @@ func SiswaOrdersByMonth(c *gin.Context) {
 		return
 	}
 
-	// 🔑 Ambil siswa langsung dari DB (jangan percaya context preload)
+	// 🔑 Ambil siswa langsung dari DB (jangan percaya preload context)
 	var siswa app.Siswa
 	if err := app.DB.
 		Where("user_id = ?", user.ID).
@@ -84,7 +84,7 @@ func SiswaOrdersByMonth(c *gin.Context) {
 
 //
 // =========================
-// CREATE ORDER (FIXED)
+// CREATE ORDER (FINAL FIX)
 // =========================
 //
 
@@ -109,7 +109,7 @@ func SiswaCreateOrder(c *gin.Context) {
 		}
 	}()
 
-	// 🔑 AMBIL SISWA BERDASARKAN USER_ID (INI KUNCI FIX)
+	// 🔑 ambil siswa berdasarkan user_id (WAJIB)
 	var siswa app.Siswa
 	if err := tx.
 		Where("user_id = ?", user.ID).
@@ -149,24 +149,51 @@ func SiswaCreateOrder(c *gin.Context) {
 			return
 		}
 
-		hargaBeli := app.Round2(menu.Harga)
+		// =========================
+		// 🔥 HITUNG DISKON SAAT ORDER
+		// =========================
+
+		var diskons []app.Diskon
+		if err := tx.
+			Model(&app.Diskon{}).
+			Joins("JOIN menu_diskons md ON md.diskon_id = diskons.id").
+			Where(`
+				md.menu_id = ?
+				AND (diskons.tanggal_awal IS NULL OR diskons.tanggal_awal <= CURRENT_TIMESTAMP())
+				AND (diskons.tanggal_akhir IS NULL OR diskons.tanggal_akhir >= CURRENT_TIMESTAMP())
+			`, menu.ID).
+			Find(&diskons).Error; err != nil {
+
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch discount"})
+			return
+		}
+
+		latest := pickLatestApplicableDiscount(diskons)
+
+		hargaBeli := menu.Harga
+		if latest != nil {
+			hargaBeli = menu.Harga * (1 - latest.PersentaseDiskon/100)
+		}
+
+		hargaBeli = app.Round2(hargaBeli)
 		sub := float64(it.Qty) * hargaBeli
 		total += sub
 
 		details = append(details, app.DetailTransaksi{
 			MenuID:    menu.ID,
 			Qty:       it.Qty,
-			HargaBeli: hargaBeli,
+			HargaBeli: hargaBeli, // ✅ harga SETELAH diskon
 			CreatedAt: time.Now(),
 		})
 	}
 
-	// 🔥 FIX UTAMA: SET SISWA_ID
+	// 🔑 transaksi TERIKAT ke siswa
 	trx := app.Transaksi{
-		PublicID: uuid.NewString(),
-		StanID:   stanID,
-		SiswaID:  siswa.ID, // ✅ WAJIB
-		Status:   app.StatusBelumDikonfirm,
+		PublicID:  uuid.NewString(),
+		StanID:    stanID,
+		SiswaID:   siswa.ID,
+		Status:    app.StatusBelumDikonfirm,
 		CreatedAt: time.Now(),
 	}
 
