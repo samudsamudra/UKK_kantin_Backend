@@ -166,6 +166,7 @@ func Register(r *gin.Engine) {
 		adminAuth.PATCH("/orders/:id/status", api.AdminUpdateOrderStatus)
 
 		// ----- reports -----
-		adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)
+		// adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)
+		adminAuth.GET("/reports/rekap", api.AdminRekapTransaksi)
 	}
 }

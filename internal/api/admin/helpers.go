@@ -3,9 +3,10 @@ package admin
 import (
 	"errors"
 
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/samudsamudra/UKK_kantin/internal/app"
-	"net/http"
 )
 
 // ErrNoStanOwner returned when the user has no stan linked.
@@ -19,6 +20,26 @@ func getUserIDFromContext(c *gin.Context) (uint, bool) {
 	}
 	uid, ok := v.(uint)
 	return uid, ok
+}
+
+// getUserFromContext mengambil user dari JWT middleware
+func getUserFromContext(c *gin.Context) (*app.User, bool) {
+	uid, ok := c.Get("user_id")
+	if !ok {
+		return nil, false
+	}
+
+	userID, ok := uid.(uint)
+	if !ok {
+		return nil, false
+	}
+
+	var user app.User
+	if err := app.DB.First(&user, userID).Error; err != nil {
+		return nil, false
+	}
+
+	return &user, true
 }
 
 // GetStanByCurrentUser finds the Stan associated with the current authenticated user.
