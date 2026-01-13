@@ -47,3 +47,6 @@ func RegisterStan(c *gin.Context) { adminpkg.RegisterStan(c) }
 
 func SiswaGetWallet(c *gin.Context) { siswapkg.SiswaGetWallet(c) }
 func SiswaTopupByAdmin(c *gin.Context) { siswapkg.SiswaTopupByAdmin(c) }
+
+func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
+
