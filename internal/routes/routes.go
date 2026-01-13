@@ -122,6 +122,9 @@ func Register(r *gin.Engine) {
 		// GET /api/siswa/orders?month=YYYY-MM
 		siswaAuth.GET("/orders", api.SiswaOrdersByMonth)
 
+		// receipt
+		siswaAuth.GET("/orders/:id/receipt/pdf", api.SiswaGetOrderReceiptPDF)
+
 		// (UKK opsional lanjutan)
 		// siswaAuth.GET("/orders/:id/receipt", api.SiswaGetReceipt)
 	}
