@@ -8,13 +8,32 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
-	"github.com/samudsamudra/UKK_kantin/internal/routes"
 	"github.com/samudsamudra/UKK_kantin/internal/app"
+	"github.com/samudsamudra/UKK_kantin/internal/routes"
 )
 
 func main() {
-	_ = godotenv.Load()
+	// =========================
+	// Load ENV (safe switch)
+	// =========================
+	appEnv := os.Getenv("APP_ENV")
 
+	switch appEnv {
+	case "role-rework":
+		log.Println("[ENV] loading .env.role-rework")
+		if err := godotenv.Load(".env.role-rework"); err != nil {
+			log.Println("[WARN] failed to load .env.role-rework")
+		}
+	default:
+		log.Println("[ENV] loading .env")
+		if err := godotenv.Load(".env"); err != nil {
+			log.Println("[WARN] failed to load .env")
+		}
+	}
+
+	// =========================
+	// Config
+	// =========================
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "6767"
@@ -26,23 +45,42 @@ func main() {
 	}
 	gin.SetMode(mode)
 
+	// =========================
+	// Router
+	// =========================
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
 
-	// DB
+	// =========================
+	// Database
+	// =========================
 	app.InitDB()
 	app.RunMigrations()
 
-	// health
+	// =========================
+	// Health check
+	// =========================
 	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		c.JSON(200, gin.H{
+			"status": "ok",
+			"env":    appEnv,
+		})
 	})
 
-	// Register all routes
+	// =========================
+	// Routes
+	// =========================
 	routes.Register(r)
 
 	addr := fmt.Sprintf(":%s", port)
-	log.Printf("starting server on %s (mode=%s)", addr, mode)
+	log.Printf(
+		"starting server on %s | mode=%s | env=%s",
+		addr,
+		mode,
+		appEnv,
+	)
+
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}

@@ -12,17 +12,24 @@ import (
 	"github.com/samudsamudra/UKK_kantin/internal/app"
 )
 
+//
+// =========================
+// Payload & Response
+// =========================
+//
+
 type loginPayload struct {
-	Username string `json:"username" binding:"required"`
+	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
 }
 
 type loginResp struct {
-	Token     string `json:"token"`
-	UserID    string `json:"user_id"` // public id
-	Role      string `json:"role"`
-	ExpiresAt int64  `json:"expires_at"`
-	Username	string `json:"username"`
+	Token              string `json:"token"`
+	UserID             string `json:"user_id"` // public id
+	Role               string `json:"role"`
+	MustChangePassword bool   `json:"must_change_password"`
+	ExpiresAt          int64  `json:"expires_at"`
+	Email              string `json:"email"`
 }
 
 type loginClaims struct {
@@ -32,6 +39,12 @@ type loginClaims struct {
 	jwt.RegisteredClaims
 }
 
+//
+// =========================
+// JWT Helper
+// =========================
+//
+
 func getJWTSecret() []byte {
 	sec := os.Getenv("JWT_SECRET")
 	if sec == "" {
@@ -40,7 +53,14 @@ func getJWTSecret() []byte {
 	return []byte(sec)
 }
 
-// Login handler: POST /api/auth/login
+//
+// =========================
+// Login Handler
+// =========================
+// POST /api/auth/login
+// =========================
+//
+
 func Login(c *gin.Context) {
 	var p loginPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
@@ -48,18 +68,27 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// Cari user berdasarkan email
 	var u app.User
-	if err := app.DB.Where("username = ?", p.Username).First(&u).Error; err != nil {
+	if err := app.DB.
+		Where("email = ?", p.Email).
+		First(&u).Error; err != nil {
+
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(p.Password)); err != nil {
+	// Compare password
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(u.PasswordHash),
+		[]byte(p.Password),
+	); err != nil {
+
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	// build claims
+	// Build JWT
 	exp := time.Now().Add(24 * time.Hour)
 	claims := &loginClaims{
 		UserID:   u.ID,
@@ -71,18 +100,20 @@ func Login(c *gin.Context) {
 		},
 	}
 
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := tok.SignedString(getJWTSecret())
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(getJWTSecret())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create token"})
 		return
 	}
 
-c.JSON(http.StatusOK, loginResp{
-	Token:     signed,
-	UserID:    u.PublicID,
-	Role:      string(u.Role),
-	ExpiresAt: exp.Unix(),
-	Username:  u.Username,
+	// Response
+	c.JSON(http.StatusOK, loginResp{
+		Token:              signed,
+		UserID:             u.PublicID,
+		Role:               string(u.Role),
+		MustChangePassword: u.MustChangePassword,
+		ExpiresAt:          exp.Unix(),
+		Email:              u.Email,
 	})
 }

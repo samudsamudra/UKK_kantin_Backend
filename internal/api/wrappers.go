@@ -38,7 +38,6 @@ func AdminDeleteDiscount(c *gin.Context) { adminpkg.AdminDeleteDiscount(c) }
 
 // --- admin / stan (orders & reports) ---
 func AdminUpdateOrderStatus(c *gin.Context) { adminpkg.AdminUpdateOrderStatus(c) }
-func AdminOrdersByMonth(c *gin.Context)     { adminpkg.AdminOrdersByMonth(c) }
 func AdminMonthlyReport(c *gin.Context)     { adminpkg.AdminMonthlyReport(c) }
 func AdminRekapTransaksi(c *gin.Context)		{ adminpkg.AdminRekapTransaksi(c) }
 
