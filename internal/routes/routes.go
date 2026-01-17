@@ -140,7 +140,7 @@ func Register(r *gin.Engine) {
 	admin.POST(
 		"/stan/register",
 		api.JWTAuth(),
-		api.RequireRole("super_admin"),
+		api.RequireSuperAdmin(), // 
 		api.RegisterStan,
 	)
 
@@ -164,7 +164,6 @@ func Register(r *gin.Engine) {
 		// ----- orders -----
 		adminAuth.GET("/orders", api.AdminOrders)
 		adminAuth.PATCH("/orders/:id/status", api.AdminUpdateOrderStatus)
-
 
 		// ----- reports -----
 		// adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)

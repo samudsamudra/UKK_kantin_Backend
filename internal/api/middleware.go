@@ -1,80 +1,167 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
 )
 
-// Claims used by middleware (must match claims created in auth.Login)
-type jwtClaims struct {
-	UserID   uint   `json:"user_id"`
-	PublicID string `json:"public_id"`
-	Role     string `json:"role"`
-	jwt.RegisteredClaims
-}
+//
+// =========================
+// JWT Secret
+// =========================
+//
 
 func jwtSecret() []byte {
 	sec := os.Getenv("JWT_SECRET")
 	if sec == "" {
+		// dev fallback only
 		sec = "dev_jwt_secret_change_me"
 	}
 	return []byte(sec)
 }
 
-// JWTAuth validates Bearer token and sets context keys:
-// "user_id" (uint), "role" (string), "public_id" (string)
+//
+// =========================
+// JWT Middleware (SECURE)
+// =========================
+//
+// Prinsip:
+// - JWT hanya bukti identitas
+// - Role diambil dari DATABASE
+// - Payload JWT TIDAK dipercaya
+//
+
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")
 		if h == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authorization header required"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "authorization header required",
+			})
 			return
 		}
+
 		parts := strings.Fields(h)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid authorization header",
+			})
 			return
 		}
 		tokenStr := parts[1]
 
-		token, err := jwt.ParseWithClaims(tokenStr, &jwtClaims{}, func(t *jwt.Token) (interface{}, error) {
-			return jwtSecret(), nil
-		})
+		claims := &jwt.RegisteredClaims{}
+
+		token, err := jwt.ParseWithClaims(
+			tokenStr,
+			claims,
+			func(t *jwt.Token) (interface{}, error) {
+				// 🔒 HARD CHECK SIGNING METHOD
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
+				return jwtSecret(), nil
+			},
+		)
+
 		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid or tampered token",
+			})
 			return
 		}
 
-		claims, ok := token.Claims.(*jwtClaims)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token claims"})
+		// =========================
+		// VALIDATE SUBJECT
+		// =========================
+		if claims.Subject == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid token subject",
+			})
 			return
 		}
 
-		c.Set("user_id", claims.UserID)
-		c.Set("role", claims.Role)
-		c.Set("public_id", claims.PublicID)
+		// =========================
+		// LOAD USER FROM DATABASE
+		// =========================
+		var user app.User
+		if err := app.DB.
+			Where("public_id = ?", claims.Subject).
+			First(&user).Error; err != nil {
+
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "user not found",
+			})
+			return
+		}
+
+		// =========================
+		// SET CONTEXT (SAFE)
+		// =========================
+		c.Set("user_id", user.ID)
+		c.Set("public_id", user.PublicID)
+		c.Set("role", fmt.Sprintf("%v", user.Role)) // ⬅️ EXPLICIT STRING CONVERSION
+
 		c.Next()
 	}
 }
 
-// RequireRole enforces exact role string (e.g. "siswa" or "admin_stan")
-func RequireRole(role string) gin.HandlerFunc {
+//
+// =========================
+// ROLE GUARD (STRING-BASED, AMAN)
+// =========================
+//
+
+func RequireRole(expected string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rv, ok := c.Get("role")
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "role not found"})
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
 			return
 		}
-		rs, _ := rv.(string)
-		if rs != role {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+
+		role, ok := rv.(string)
+		if !ok || role != expected {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
 			return
 		}
+
+		c.Next()
+	}
+}
+
+// =========================
+// SUPER ADMIN GUARD (HARD)
+// =========================
+func RequireSuperAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rv, ok := c.Get("role")
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
+			return
+		}
+
+		role, ok := rv.(string)
+		if !ok || role != "super_admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "super admin only",
+			})
+			return
+		}
+
 		c.Next()
 	}
 }

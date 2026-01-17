@@ -30,40 +30,57 @@ type registerStanPayload struct {
 //
 
 // RegisterStan -> POST /api/admin/stan/register
-// Only super_admin can create admin_stan
+// 🔒 ONLY super_admin (HARD CHECK)
 func RegisterStan(c *gin.Context) {
-	// pastikan role super_admin
-	role, ok := c.Get("role")
-	if !ok || role != string(app.RoleSuperAdmin) {
+	// =========================
+	// FINAL HARD GUARD
+	// =========================
+	roleAny, ok := c.Get("role")
+	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
 	}
 
+	role, ok := roleAny.(string)
+	if !ok || role != "super_admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+
+	// =========================
+	// PAYLOAD
+	// =========================
 	var p registerStanPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// cek email unik
+	// =========================
+	// CHECK EMAIL UNIQUE
+	// =========================
 	var ex app.User
 	if err := app.DB.Where("email = ?", p.Email).First(&ex).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "email already exists"})
 		return
 	}
 
-	// hash password
+	// =========================
+	// HASH PASSWORD
+	// =========================
 	hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
 		return
 	}
 
-	// create user admin stan
+	// =========================
+	// CREATE USER (ADMIN STAN)
+	// =========================
 	user := app.User{
 		Email:              p.Email,
 		PasswordHash:       string(hash),
-		Role:               app.RoleAdminStan,
+		Role:               "admin_stan", // 🔒 EXPLICIT STRING
 		MustChangePassword: true,
 	}
 
@@ -72,7 +89,9 @@ func RegisterStan(c *gin.Context) {
 		return
 	}
 
-	// create stan
+	// =========================
+	// CREATE STAN
+	// =========================
 	stan := app.Stan{
 		NamaStan:    p.NamaStan,
 		NamaPemilik: p.NamaPemilik,
@@ -86,10 +105,10 @@ func RegisterStan(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message":  "register stan success",
-		"user_id":  user.PublicID,
-		"stan_id":  stan.PublicID,
-		"email":    user.Email,
+		"message":              "register stan success",
+		"user_id":              user.PublicID,
+		"stan_id":              stan.PublicID,
+		"email":                user.Email,
 		"must_change_password": user.MustChangePassword,
 	})
 }

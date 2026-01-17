@@ -35,7 +35,7 @@ type loginResp struct {
 type loginClaims struct {
 	UserID   uint   `json:"user_id"`
 	PublicID string `json:"public_id"`
-	Role     string `json:"role"`
+	Role     string `json:"role"` // ⛔ hanya info, BUKAN source of truth
 	jwt.RegisteredClaims
 }
 
@@ -88,13 +88,17 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Build JWT
+	// =========================
+	// BUILD JWT (SECURE)
+	// =========================
 	exp := time.Now().Add(24 * time.Hour)
+
 	claims := &loginClaims{
 		UserID:   u.ID,
 		PublicID: u.PublicID,
-		Role:     string(u.Role),
+		Role:     string(u.Role), // info only
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   u.PublicID,                 // 🔒 KUNCI UTAMA (IDENTITY)
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(exp),
 		},
