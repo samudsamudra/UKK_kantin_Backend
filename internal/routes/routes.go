@@ -162,7 +162,9 @@ func Register(r *gin.Engine) {
 		adminAuth.DELETE("/discounts/:id", api.AdminDeleteDiscount)
 
 		// ----- orders -----
+		adminAuth.GET("/orders", api.AdminOrders)
 		adminAuth.PATCH("/orders/:id/status", api.AdminUpdateOrderStatus)
+
 
 		// ----- reports -----
 		// adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)

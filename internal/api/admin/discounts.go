@@ -19,17 +19,17 @@ import (
 //
 
 type createDiscountPayload struct {
-	Nama        string   `json:"nama_diskon" binding:"required"`
-	Persentase  float64  `json:"persentase_diskon" binding:"required,gte=0,lte=100"`
-	TanggalAwal *string  `json:"tanggal_awal,omitempty"`
+	Nama         string  `json:"nama_diskon" binding:"required"`
+	Persentase   float64 `json:"persentase_diskon" binding:"required,gte=0,lte=100"`
+	TanggalAwal  *string `json:"tanggal_awal,omitempty"`
 	TanggalAkhir *string `json:"tanggal_akhir,omitempty"`
 }
 
 type updateDiscountPayload struct {
-	Nama        *string  `json:"nama_diskon,omitempty"`
-	Persentase  *float64 `json:"persentase_diskon,omitempty"`
-	TanggalAwal *string  `json:"tanggal_awal,omitempty"`
-	TanggalAkhir *string `json:"tanggal_akhir,omitempty"`
+	Nama         *string  `json:"nama_diskon,omitempty"`
+	Persentase   *float64 `json:"persentase_diskon,omitempty"`
+	TanggalAwal  *string  `json:"tanggal_awal,omitempty"`
+	TanggalAkhir *string  `json:"tanggal_akhir,omitempty"`
 }
 
 //
@@ -98,10 +98,10 @@ func AdminCreateDiscount(c *gin.Context) {
 	}
 
 	d := app.Diskon{
-		PublicID:    uuid.NewString(),
-		Nama:        p.Nama,
-		Persentase:  p.Persentase,
-		TanggalAwal: tAwal,
+		PublicID:     uuid.NewString(),
+		Nama:         p.Nama,
+		Persentase:   p.Persentase,
+		TanggalAwal:  tAwal,
 		TanggalAkhir: tAkhir,
 	}
 
@@ -114,9 +114,18 @@ func AdminCreateDiscount(c *gin.Context) {
 		"diskon_id":         d.PublicID,
 		"nama_diskon":       d.Nama,
 		"persentase_diskon": d.Persentase,
-		"tanggal_awal":      d.TanggalAwal,
-		"tanggal_akhir":     d.TanggalAkhir,
+
+		// raw (machine)
+		"tanggal_awal":  app.FormatISOOrNil(d.TanggalAwal),
+		"tanggal_akhir": app.FormatISOOrNil(d.TanggalAkhir),
+
+		// human (UX)
+		"tanggal_awal_human":  app.FormatDateID(d.TanggalAwal, false),
+		"tanggal_awal_short":  app.FormatDateID(d.TanggalAwal, true),
+		"tanggal_akhir_human": app.FormatDateID(d.TanggalAkhir, false),
+		"tanggal_akhir_short": app.FormatDateID(d.TanggalAkhir, true),
 	})
+
 }
 
 //
@@ -138,8 +147,14 @@ func AdminListDiscounts(c *gin.Context) {
 			"diskon_id":         d.PublicID,
 			"nama_diskon":       d.Nama,
 			"persentase_diskon": d.Persentase,
-			"tanggal_awal":      d.TanggalAwal,
-			"tanggal_akhir":     d.TanggalAkhir,
+
+			"tanggal_awal":  app.FormatISOOrNil(d.TanggalAwal),
+			"tanggal_akhir": app.FormatISOOrNil(d.TanggalAkhir),
+
+			"tanggal_awal_human":  app.FormatDateID(d.TanggalAwal, false),
+			"tanggal_awal_short":  app.FormatDateID(d.TanggalAwal, true),
+			"tanggal_akhir_human": app.FormatDateID(d.TanggalAkhir, false),
+			"tanggal_akhir_short": app.FormatDateID(d.TanggalAkhir, true),
 		})
 	}
 

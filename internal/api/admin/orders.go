@@ -12,11 +12,32 @@ import (
 
 //
 // =========================
-// LIST ORDERS
+// HELPER STATUS LABEL (ADMIN)
 // =========================
 //
 
-// AdminOrders -> GET /api/admin/orders
+func adminStatusLabel(s app.TransaksiStatus) string {
+	switch s {
+	case app.StatusBelumDikonfirm:
+		return "Menunggu konfirmasi"
+	case app.StatusDimasak:
+		return "Sedang dimasak"
+	case app.StatusDiantar:
+		return "Sedang diantar"
+	case app.StatusSampai:
+		return "Pesanan sudah sampai"
+	default:
+		return "Status tidak diketahui"
+	}
+}
+
+//
+// =========================
+// LIST ORDERS (ADMIN STAN)
+// =========================
+// GET /api/admin/orders
+//
+
 func AdminOrders(c *gin.Context) {
 	uidv, ok := c.Get("user_id")
 	if !ok {
@@ -63,11 +84,19 @@ func AdminOrders(c *gin.Context) {
 
 		out = append(out, gin.H{
 			"transaksi_id": t.PublicID,
+
+			// STATUS
 			"status":       t.Status,
-			"created_at":   t.CreatedAt,
-			"created_real": app.FormatTimeHuman(t.CreatedAt),
-			"total":        app.Round2(total),
-			"items":        items,
+			"status_label": adminStatusLabel(t.Status),
+
+			// WAKTU (UX)
+			"created_at":        t.CreatedAt,
+			"created_at_human": app.FormatTimeWithClock(t.CreatedAt),
+			"updated_at_human": app.FormatTimeWithClock(t.UpdatedAt),
+
+			// DATA
+			"total": app.Round2(total),
+			"items": items,
 		})
 	}
 
@@ -79,11 +108,11 @@ func AdminOrders(c *gin.Context) {
 
 //
 // =========================
-// UPDATE STATUS
+// UPDATE STATUS ORDER (ADMIN)
 // =========================
+// PATCH /api/admin/orders/:id/status
 //
 
-// AdminUpdateOrderStatus -> PATCH /api/admin/orders/:id/status
 func AdminUpdateOrderStatus(c *gin.Context) {
 	trxPub := c.Param("id")
 	if trxPub == "" {

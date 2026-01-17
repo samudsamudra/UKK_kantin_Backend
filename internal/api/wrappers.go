@@ -50,4 +50,4 @@ func SiswaGetWallet(c *gin.Context) { siswapkg.SiswaGetWallet(c) }
 func SiswaTopupByAdmin(c *gin.Context) { siswapkg.SiswaTopupByAdmin(c) }
 
 func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
-
+func AdminOrders(c *gin.Context) { adminpkg.AdminOrders(c) }

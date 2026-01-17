@@ -1,7 +1,7 @@
 package siswa
 
 import (
-	"log"
+	// "log"
 	"net/http"
 	"time"
 
@@ -80,7 +80,6 @@ func SiswaOrdersByMonth(c *gin.Context) {
 // CREATE ORDER (FINAL CLEAN)
 // =========================
 //
-
 func SiswaCreateOrder(c *gin.Context) {
 	user, ok := getUserFromContext(c)
 	if !ok {
@@ -111,6 +110,9 @@ func SiswaCreateOrder(c *gin.Context) {
 		return
 	}
 
+	// 🔑 ambil diskon aktif SEKALI
+	diskon := app.GetActiveDiscount()
+
 	var stanID uint
 	var total float64
 	var details []app.DetailTransaksi
@@ -126,6 +128,7 @@ func SiswaCreateOrder(c *gin.Context) {
 			return
 		}
 
+		// ❌ campur stan tidak boleh
 		if stanID == 0 {
 			stanID = menu.StanID
 		} else if menu.StanID != stanID {
@@ -134,14 +137,19 @@ func SiswaCreateOrder(c *gin.Context) {
 			return
 		}
 
+		// 💰 harga final (apply diskon DI SINI)
 		harga := app.Round2(menu.Harga)
+		if diskon != nil {
+			harga = app.ApplyDiscount(harga, diskon.Persentase)
+		}
+
 		sub := float64(it.Qty) * harga
 		total += sub
 
 		details = append(details, app.DetailTransaksi{
 			MenuID:    menu.ID,
 			Qty:       it.Qty,
-			HargaBeli: harga,
+			HargaBeli: harga, // 🔥 harga sudah diskon
 			CreatedAt: time.Now(),
 		})
 	}
@@ -155,7 +163,6 @@ func SiswaCreateOrder(c *gin.Context) {
 
 	if err := tx.Create(&trx).Error; err != nil {
 		tx.Rollback()
-		log.Println("create transaksi error:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create transaksi"})
 		return
 	}

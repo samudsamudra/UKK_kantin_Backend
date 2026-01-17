@@ -30,11 +30,16 @@ type updateMenuPayload struct {
 
 //
 // =========================
-// CREATE
+// CREATE MENU (ADMIN STAN)
 // =========================
 //
 
 func AdminCreateMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	var p createMenuPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -42,6 +47,7 @@ func AdminCreateMenu(c *gin.Context) {
 	}
 
 	menu := app.Menu{
+		StanID:      stan.ID, // 🔑 IKAT KE STAN
 		NamaMakanan: p.NamaMakanan,
 		Harga:       p.Harga,
 		Jenis:       app.MenuJenis(p.Jenis),
@@ -54,23 +60,32 @@ func AdminCreateMenu(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "menu created",
-		"menu_id": menu.PublicID,
-		"nama":    menu.NamaMakanan,
-		"harga":   menu.Harga,
-		"jenis":   menu.Jenis,
+		"message":      "menu created",
+		"menu_id":      menu.PublicID,
+		"nama_makanan": menu.NamaMakanan,
+		"harga":        menu.Harga,
+		"jenis":        menu.Jenis,
 	})
 }
 
 //
 // =========================
-// LIST
+// LIST MENU (ADMIN STAN)
 // =========================
 //
 
 func AdminListMenus(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	var menus []app.Menu
-	if err := app.DB.Order("created_at DESC").Find(&menus).Error; err != nil {
+	if err := app.DB.
+		Where("stan_id = ?", stan.ID).
+		Order("created_at DESC").
+		Find(&menus).Error; err != nil {
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch menus"})
 		return
 	}
@@ -91,15 +106,23 @@ func AdminListMenus(c *gin.Context) {
 
 //
 // =========================
-// GET
+// GET MENU DETAIL (ADMIN)
 // =========================
 //
 
 func AdminGetMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	pub := c.Param("id")
 
 	var menu app.Menu
-	if err := app.DB.Where("public_id = ?", pub).First(&menu).Error; err != nil {
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
 		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
 		return
 	}
@@ -115,15 +138,23 @@ func AdminGetMenu(c *gin.Context) {
 
 //
 // =========================
-// UPDATE
+// UPDATE MENU (ADMIN)
 // =========================
 //
 
 func AdminUpdateMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	pub := c.Param("id")
 
 	var menu app.Menu
-	if err := app.DB.Where("public_id = ?", pub).First(&menu).Error; err != nil {
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
 		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
 		return
 	}
@@ -160,15 +191,23 @@ func AdminUpdateMenu(c *gin.Context) {
 
 //
 // =========================
-// DELETE
+// DELETE MENU (ADMIN)
 // =========================
 //
 
 func AdminDeleteMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	pub := c.Param("id")
 
 	var menu app.Menu
-	if err := app.DB.Where("public_id = ?", pub).First(&menu).Error; err != nil {
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
 		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
 		return
 	}
