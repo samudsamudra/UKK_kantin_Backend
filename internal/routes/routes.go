@@ -140,7 +140,7 @@ func Register(r *gin.Engine) {
 	admin.POST(
 		"/stan/register",
 		api.JWTAuth(),
-		api.RequireSuperAdmin(), // 
+		api.RequireSuperAdmin(), //
 		api.RegisterStan,
 	)
 
@@ -169,4 +169,14 @@ func Register(r *gin.Engine) {
 		// adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)
 		adminAuth.GET("/reports/rekap", api.AdminRekapTransaksi)
 	}
+
+	// =========================
+	// SYSTEM (SUPER ADMIN ONLY)
+	// =========================
+	admin.POST(
+		"/system/clear-database",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminClearDatabase,
+	)
 }

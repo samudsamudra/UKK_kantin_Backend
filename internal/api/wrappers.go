@@ -51,3 +51,7 @@ func SiswaTopupByAdmin(c *gin.Context) { siswapkg.SiswaTopupByAdmin(c) }
 
 func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
 func AdminOrders(c *gin.Context) { adminpkg.AdminOrders(c) }
+
+func AdminClearDatabase(c *gin.Context) {
+	adminpkg.AdminClearDatabase(c)
+}
