@@ -82,9 +82,8 @@ func Register(r *gin.Engine) {
 	// root API group
 	apiGroup := r.Group("/api")
 
-	// global protections
-	apiGroup.Use(requireJSON(1 << 20))                // 1 MB JSON
-	apiGroup.Use(simpleRateLimiter(200, time.Minute)) // general rate limit
+	// rate limit tetap global
+	apiGroup.Use(simpleRateLimiter(200, time.Minute))
 
 	// =========================
 	// AUTH
@@ -178,5 +177,17 @@ func Register(r *gin.Engine) {
 		api.JWTAuth(),
 		api.RequireSuperAdmin(),
 		api.AdminClearDatabase,
+	)
+	admin.POST(
+		"/system/import-siswa",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminImportSiswa,
+	)
+	admin.GET(
+		"/system/siswas",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminGetAllSiswas,
 	)
 }
