@@ -19,7 +19,7 @@ import (
 //
 
 type loginPayload struct {
-	Email    string `json:"email" binding:"required,email"`
+	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
@@ -98,7 +98,7 @@ func Login(c *gin.Context) {
 		PublicID: u.PublicID,
 		Role:     string(u.Role), // info only
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   u.PublicID,                 // 🔒 KUNCI UTAMA (IDENTITY)
+			Subject:   u.PublicID, // 🔒 KUNCI UTAMA (IDENTITY)
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(exp),
 		},
