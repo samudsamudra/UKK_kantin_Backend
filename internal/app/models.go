@@ -148,14 +148,18 @@ func (m *Menu) BeforeCreate(tx *gorm.DB) error {
 //
 
 type Diskon struct {
-	ID               uint       `gorm:"primaryKey" json:"-"`
-	PublicID         string     `gorm:"size:36;uniqueIndex;not null" json:"diskon_id"`
-	Nama             string     `gorm:"size:100;not null" json:"nama"`
-	Persentase       float64    `gorm:"not null" json:"persentase"` // 0–100
-	TanggalAwal      *time.Time `gorm:"index" json:"tanggal_awal"`
-	TanggalAkhir     *time.Time `gorm:"index" json:"tanggal_akhir"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID          uint       `gorm:"primaryKey" json:"-"`
+	PublicID    string     `gorm:"size:36;uniqueIndex;not null" json:"diskon_id"`
+
+	StanID      uint       `gorm:"index;not null"`
+	Nama        string     `gorm:"size:100;not null"`
+	Persentase  float64    `gorm:"not null"`
+
+	TanggalAwal  *time.Time `gorm:"index"`
+	TanggalAkhir *time.Time `gorm:"index"`
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (d *Diskon) BeforeCreate(tx *gorm.DB) error {

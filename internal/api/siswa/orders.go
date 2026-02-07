@@ -75,11 +75,9 @@ func SiswaOrdersByMonth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"orders": out})
 }
 
-//
 // =========================
 // CREATE ORDER (FINAL CLEAN)
 // =========================
-//
 func SiswaCreateOrder(c *gin.Context) {
 	user, ok := getUserFromContext(c)
 	if !ok {
@@ -110,8 +108,8 @@ func SiswaCreateOrder(c *gin.Context) {
 		return
 	}
 
-	// 🔑 ambil diskon aktif SEKALI
-	diskon := app.GetActiveDiscount()
+
+	var diskon *app.Diskon
 
 	var stanID uint
 	var total float64
@@ -131,6 +129,7 @@ func SiswaCreateOrder(c *gin.Context) {
 		// ❌ campur stan tidak boleh
 		if stanID == 0 {
 			stanID = menu.StanID
+			diskon = app.GetActiveDiscountByStan(stanID)
 		} else if menu.StanID != stanID {
 			tx.Rollback()
 			c.JSON(http.StatusBadRequest, gin.H{"error": "mixed stans not allowed"})

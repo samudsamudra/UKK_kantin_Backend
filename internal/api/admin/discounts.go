@@ -76,6 +76,11 @@ func parseOptionalTime(s *string) (*time.Time, error) {
 //
 
 func AdminCreateDiscount(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
 	var p createDiscountPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -99,6 +104,7 @@ func AdminCreateDiscount(c *gin.Context) {
 
 	d := app.Diskon{
 		PublicID:     uuid.NewString(),
+		StanID:       stan.ID,
 		Nama:         p.Nama,
 		Persentase:   p.Persentase,
 		TanggalAwal:  tAwal,
@@ -112,18 +118,11 @@ func AdminCreateDiscount(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"diskon_id":         d.PublicID,
+		"stan_id":           stan.PublicID,
 		"nama_diskon":       d.Nama,
 		"persentase_diskon": d.Persentase,
-
-		// raw (machine)
-		"tanggal_awal":  app.FormatISOOrNil(d.TanggalAwal),
-		"tanggal_akhir": app.FormatISOOrNil(d.TanggalAkhir),
-
-		// human (UX)
-		"tanggal_awal_human":  app.FormatDateID(d.TanggalAwal, false),
-		"tanggal_awal_short":  app.FormatDateID(d.TanggalAwal, true),
-		"tanggal_akhir_human": app.FormatDateID(d.TanggalAkhir, false),
-		"tanggal_akhir_short": app.FormatDateID(d.TanggalAkhir, true),
+		"tanggal_awal":      app.FormatISOOrNil(d.TanggalAwal),
+		"tanggal_akhir":     app.FormatISOOrNil(d.TanggalAkhir),
 	})
 
 }

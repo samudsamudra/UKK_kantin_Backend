@@ -44,8 +44,7 @@ func SiswaListMenus(c *gin.Context) {
 		}
 	}
 
-	// 🔑 ambil diskon aktif (GLOBAL)
-	diskon := app.GetActiveDiscount()
+
 
 	out := make([]gin.H, 0, len(menus))
 	for _, m := range menus {
@@ -56,7 +55,7 @@ func SiswaListMenus(c *gin.Context) {
 		priceFinal := price
 
 		var diskonInfo interface{} = nil
-		if diskon != nil {
+		if diskon := app.GetActiveDiscountByStan(m.StanID); diskon != nil {
 			priceFinal = app.ApplyDiscount(price, diskon.Persentase)
 			diskonInfo = gin.H{
 				"nama":       diskon.Nama,
@@ -79,9 +78,9 @@ func SiswaListMenus(c *gin.Context) {
 				"name": stanName,
 			},
 
-			"created_at":        m.CreatedAt,
+			"created_at":       m.CreatedAt,
 			"created_at_human": app.FormatTimeWithClock(m.CreatedAt),
-			"updated_at":        m.UpdatedAt,
+			"updated_at":       m.UpdatedAt,
 			"updated_at_human": app.FormatTimeWithClock(m.UpdatedAt),
 		})
 	}
@@ -120,7 +119,10 @@ func SiswaGetMenu(c *gin.Context) {
 	stanName := getStanNameByID(m.StanID)
 
 	// 🔑 diskon aktif
-	diskon := app.GetActiveDiscount()
+	// diskon := app.GetActiveDiscount()
+
+	// 🔑 diskon aktif per-stan
+	diskon := app.GetActiveDiscountByStan(m.StanID)
 
 	price := app.Round2(m.Harga)
 	priceFinal := price
@@ -149,9 +151,9 @@ func SiswaGetMenu(c *gin.Context) {
 			"name": stanName,
 		},
 
-		"created_at":        m.CreatedAt,
+		"created_at":       m.CreatedAt,
 		"created_at_human": app.FormatTimeWithClock(m.CreatedAt),
-		"updated_at":        m.UpdatedAt,
+		"updated_at":       m.UpdatedAt,
 		"updated_at_human": app.FormatTimeWithClock(m.UpdatedAt),
 	})
 }

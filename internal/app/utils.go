@@ -74,6 +74,7 @@ func FormatISOOrNil(t *time.Time) interface{} {
 	}
 	return t.UTC().Format(time.RFC3339)
 }
+
 // FormatTimeWithClock returns:
 // "12:05 (5 menit lalu)" or "12:05 (baru saja)"
 // If older than 24h, fallback to full date.
@@ -119,6 +120,7 @@ func FormatTimeWithClock(t time.Time) string {
 		return t.Format("02 Jan 2006 15:04")
 	}
 }
+
 // =========================
 // DISCOUNT HELPERS (UKK)
 // =========================
@@ -146,6 +148,25 @@ func GetActiveDiscount() *Diskon {
 	return &d
 }
 
+// GetActiveDiscountByStan mengambil 1 diskon aktif MILIK STAN
+func GetActiveDiscountByStan(stanID uint) *Diskon {
+	var d Diskon
+	now := time.Now().UTC()
+
+	err := DB.
+		Where(
+			"stan_id = ? AND (tanggal_awal IS NULL OR tanggal_awal <= ?) AND (tanggal_akhir IS NULL OR tanggal_akhir >= ?)",
+			stanID, now, now,
+		).
+		Order("created_at DESC").
+		First(&d).Error
+
+	if err != nil {
+		return nil
+	}
+	return &d
+}
+
 // ApplyDiscount menghitung harga setelah diskon persen
 func ApplyDiscount(price float64, percent float64) float64 {
 	if percent <= 0 {
@@ -154,6 +175,7 @@ func ApplyDiscount(price float64, percent float64) float64 {
 	disc := price * (percent / 100)
 	return Round2(price - disc)
 }
+
 // FormatDateID formats date into Indonesian human-readable date.
 // short = true  -> "17 Jan 2026"
 // short = false -> "17 Januari 2026"
