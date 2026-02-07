@@ -63,3 +63,7 @@ func AdminGetAllSiswas(c *gin.Context) {
 	adminpkg.AdminGetAllSiswas(c)
 }
 
+func AdminPatchMenu(c *gin.Context) {
+	adminpkg.AdminPatchMenu(c)
+}
+

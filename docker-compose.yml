@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  mysql_ukk:
+    image: mysql:8.0
+    container_name: mysql_ukk_2026
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ukk_kantin_2026
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data_ukk:/var/lib/mysql
+
+  adminer:
+    image: adminer
+    container_name: adminer_ukk
+    restart: always
+    ports:
+      - "8081:8080"
+
+volumes:
+  mysql_data_ukk:

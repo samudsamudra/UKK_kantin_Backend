@@ -149,6 +149,7 @@ func Register(r *gin.Engine) {
 		// ----- menu -----
 		adminAuth.POST("/menus", api.AdminCreateMenu)
 		adminAuth.PUT("/menus/:id", api.AdminUpdateMenu)
+		adminAuth.PATCH("/menus/:id", api.AdminPatchMenu)
 		adminAuth.DELETE("/menus/:id", api.AdminDeleteMenu)
 		adminAuth.GET("/menus", api.AdminListMenus)
 		adminAuth.GET("/menus/:id", api.AdminGetMenu)
@@ -190,4 +191,11 @@ func Register(r *gin.Engine) {
 		api.RequireSuperAdmin(),
 		api.AdminGetAllSiswas,
 	)
+	admin.GET(
+		"/system/stans",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminGetAllStan,
+	)
+
 }

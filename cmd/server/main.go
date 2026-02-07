@@ -10,25 +10,22 @@ import (
 
 	"github.com/samudsamudra/UKK_kantin/internal/app"
 	"github.com/samudsamudra/UKK_kantin/internal/routes"
+	"github.com/samudsamudra/UKK_kantin/internal/seed"
 )
 
 func main() {
 	// =========================
-	// Load ENV (safe switch)
+	// Load ENV
 	// =========================
 	appEnv := os.Getenv("APP_ENV")
 
 	switch appEnv {
 	case "role-rework":
 		log.Println("[ENV] loading .env.role-rework")
-		if err := godotenv.Load(".env.role-rework"); err != nil {
-			log.Println("[WARN] failed to load .env.role-rework")
-		}
+		_ = godotenv.Load(".env.role-rework")
 	default:
 		log.Println("[ENV] loading .env")
-		if err := godotenv.Load(".env"); err != nil {
-			log.Println("[WARN] failed to load .env")
-		}
+		_ = godotenv.Load(".env")
 	}
 
 	// =========================
@@ -46,10 +43,15 @@ func main() {
 	gin.SetMode(mode)
 
 	// =========================
+	// Disable Gin default route print
+	// =========================
+	gin.DebugPrintRouteFunc = func(string, string, string, int) {}
+
+	// =========================
 	// Router
 	// =========================
 	r := gin.New()
-	r.Use(gin.Logger())
+	r.Use(app.PrettyLogger()) // 🔥 LOGGER WARNA
 	r.Use(gin.Recovery())
 
 	// =========================
@@ -59,7 +61,15 @@ func main() {
 	app.RunMigrations()
 
 	// =========================
-	// Health check
+	// Seed (REALISTIC)
+	// =========================
+	seed.SeedSuperAdmin()
+	seed.SeedStans()
+	seed.SeedMenus()
+	seed.SeedSiswas()
+
+	// =========================
+	// Health Check
 	// =========================
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -73,15 +83,18 @@ func main() {
 	// =========================
 	routes.Register(r)
 
+	// =========================
+	// API REPORT (STARTUP)
+	// =========================
+	app.PrintRoutesReport(r, appEnv, port)
+
+	// =========================
+	// Run Server
+	// =========================
 	addr := fmt.Sprintf(":%s", port)
-	log.Printf(
-		"starting server on %s | mode=%s | env=%s",
-		addr,
-		mode,
-		appEnv,
-	)
+	log.Printf("[START] listening on %s\n", addr)
 
 	if err := r.Run(addr); err != nil {
-		log.Fatalf("server failed: %v", err)
+		log.Fatal(err)
 	}
 }

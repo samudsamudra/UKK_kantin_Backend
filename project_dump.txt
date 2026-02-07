@@ -1,0 +1,3513 @@
+﻿===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\cmd\server\main.go =====
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+	"github.com/samudsamudra/UKK_kantin/internal/routes"
+
+	"github.com/samudsamudra/UKK_kantin/internal/seed"
+)
+
+func main() {
+	// =========================
+	// Load ENV (safe switch)
+	// =========================
+	appEnv := os.Getenv("APP_ENV")
+
+	switch appEnv {
+	case "role-rework":
+		log.Println("[ENV] loading .env.role-rework")
+		if err := godotenv.Load(".env.role-rework"); err != nil {
+			log.Println("[WARN] failed to load .env.role-rework")
+		}
+	default:
+		log.Println("[ENV] loading .env")
+		if err := godotenv.Load(".env"); err != nil {
+			log.Println("[WARN] failed to load .env")
+		}
+	}
+
+	// =========================
+	// Config
+	// =========================
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "6767"
+	}
+
+	mode := os.Getenv("GIN_MODE")
+	if mode == "" {
+		mode = gin.DebugMode
+	}
+	gin.SetMode(mode)
+
+	// =========================
+	// Router
+	// =========================
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+
+	// =========================
+	// Database
+	// =========================
+	app.InitDB()
+	app.RunMigrations()
+	seed.SeedSuperAdmin()
+
+
+	// =========================
+	// Health check
+	// =========================
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "ok",
+			"env":    appEnv,
+		})
+	})
+
+	// =========================
+	// Routes
+	// =========================
+	routes.Register(r)
+
+	addr := fmt.Sprintf(":%s", port)
+	log.Printf(
+		"starting server on %s | mode=%s | env=%s",
+		addr,
+		mode,
+		appEnv,
+	)
+
+	if err := r.Run(addr); err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\discounts.go =====
+package admin
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payloads
+// =========================
+//
+
+type createDiscountPayload struct {
+	Nama         string  `json:"nama_diskon" binding:"required"`
+	Persentase   float64 `json:"persentase_diskon" binding:"required,gte=0,lte=100"`
+	TanggalAwal  *string `json:"tanggal_awal,omitempty"`
+	TanggalAkhir *string `json:"tanggal_akhir,omitempty"`
+}
+
+type updateDiscountPayload struct {
+	Nama         *string  `json:"nama_diskon,omitempty"`
+	Persentase   *float64 `json:"persentase_diskon,omitempty"`
+	TanggalAwal  *string  `json:"tanggal_awal,omitempty"`
+	TanggalAkhir *string  `json:"tanggal_akhir,omitempty"`
+}
+
+//
+// =========================
+// Helpers
+// =========================
+//
+
+func parseOptionalTime(s *string) (*time.Time, error) {
+	if s == nil {
+		return nil, nil
+	}
+	str := strings.TrimSpace(*s)
+	if str == "" {
+		return nil, nil
+	}
+
+	// RFC3339
+	if t, err := time.Parse(time.RFC3339, str); err == nil {
+		tt := t.UTC()
+		return &tt, nil
+	}
+
+	loc, _ := time.LoadLocation("Asia/Jakarta")
+	layouts := []string{
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+
+	for _, l := range layouts {
+		if t, err := time.ParseInLocation(l, str, loc); err == nil {
+			tt := t.UTC()
+			return &tt, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported date format")
+}
+
+//
+// =========================
+// CREATE
+// =========================
+//
+
+func AdminCreateDiscount(c *gin.Context) {
+	var p createDiscountPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tAwal, err := parseOptionalTime(p.TanggalAwal)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tanggal_awal"})
+		return
+	}
+	tAkhir, err := parseOptionalTime(p.TanggalAkhir)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tanggal_akhir"})
+		return
+	}
+	if tAwal != nil && tAkhir != nil && tAwal.After(*tAkhir) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tanggal_awal must be before tanggal_akhir"})
+		return
+	}
+
+	d := app.Diskon{
+		PublicID:     uuid.NewString(),
+		Nama:         p.Nama,
+		Persentase:   p.Persentase,
+		TanggalAwal:  tAwal,
+		TanggalAkhir: tAkhir,
+	}
+
+	if err := app.DB.Create(&d).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create discount"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"diskon_id":         d.PublicID,
+		"nama_diskon":       d.Nama,
+		"persentase_diskon": d.Persentase,
+
+		// raw (machine)
+		"tanggal_awal":  app.FormatISOOrNil(d.TanggalAwal),
+		"tanggal_akhir": app.FormatISOOrNil(d.TanggalAkhir),
+
+		// human (UX)
+		"tanggal_awal_human":  app.FormatDateID(d.TanggalAwal, false),
+		"tanggal_awal_short":  app.FormatDateID(d.TanggalAwal, true),
+		"tanggal_akhir_human": app.FormatDateID(d.TanggalAkhir, false),
+		"tanggal_akhir_short": app.FormatDateID(d.TanggalAkhir, true),
+	})
+
+}
+
+//
+// =========================
+// LIST
+// =========================
+//
+
+func AdminListDiscounts(c *gin.Context) {
+	var diskons []app.Diskon
+	if err := app.DB.Order("created_at DESC").Find(&diskons).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list discounts"})
+		return
+	}
+
+	out := make([]gin.H, 0, len(diskons))
+	for _, d := range diskons {
+		out = append(out, gin.H{
+			"diskon_id":         d.PublicID,
+			"nama_diskon":       d.Nama,
+			"persentase_diskon": d.Persentase,
+
+			"tanggal_awal":  app.FormatISOOrNil(d.TanggalAwal),
+			"tanggal_akhir": app.FormatISOOrNil(d.TanggalAkhir),
+
+			"tanggal_awal_human":  app.FormatDateID(d.TanggalAwal, false),
+			"tanggal_awal_short":  app.FormatDateID(d.TanggalAwal, true),
+			"tanggal_akhir_human": app.FormatDateID(d.TanggalAkhir, false),
+			"tanggal_akhir_short": app.FormatDateID(d.TanggalAkhir, true),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"discounts": out})
+}
+
+//
+// =========================
+// GET
+// =========================
+//
+
+func AdminGetDiscount(c *gin.Context) {
+	pub := c.Param("id")
+
+	var d app.Diskon
+	if err := app.DB.Where("public_id = ?", pub).First(&d).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "discount not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"diskon_id":         d.PublicID,
+		"nama_diskon":       d.Nama,
+		"persentase_diskon": d.Persentase,
+		"tanggal_awal":      d.TanggalAwal,
+		"tanggal_akhir":     d.TanggalAkhir,
+	})
+}
+
+//
+// =========================
+// UPDATE
+// =========================
+//
+
+func AdminUpdateDiscount(c *gin.Context) {
+	pub := c.Param("id")
+
+	var d app.Diskon
+	if err := app.DB.Where("public_id = ?", pub).First(&d).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "discount not found"})
+		return
+	}
+
+	var p updateDiscountPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if p.Nama != nil {
+		d.Nama = *p.Nama
+	}
+	if p.Persentase != nil {
+		d.Persentase = *p.Persentase
+	}
+	if p.TanggalAwal != nil {
+		t, err := parseOptionalTime(p.TanggalAwal)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tanggal_awal"})
+			return
+		}
+		d.TanggalAwal = t
+	}
+	if p.TanggalAkhir != nil {
+		t, err := parseOptionalTime(p.TanggalAkhir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tanggal_akhir"})
+			return
+		}
+		d.TanggalAkhir = t
+	}
+
+	if err := app.DB.Save(&d).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update discount"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "discount updated"})
+}
+
+//
+// =========================
+// DELETE
+// =========================
+//
+
+func AdminDeleteDiscount(c *gin.Context) {
+	pub := c.Param("id")
+
+	var d app.Diskon
+	if err := app.DB.Where("public_id = ?", pub).First(&d).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "discount not found"})
+		return
+	}
+
+	if err := app.DB.Delete(&d).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete discount"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "discount deleted"})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\get_all_siswas.go =====
+package admin
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+type siswaResp struct {
+	PublicID string `json:"public_id"`
+	Nama     string `json:"nama_lengkap"`
+	Email    string `json:"email"`
+}
+
+// AdminGetAllSiswas
+// GET /api/admin/system/siswas
+// ðŸ”’ SUPER ADMIN ONLY
+func AdminGetAllSiswas(c *gin.Context) {
+	// defense-in-depth
+	roleAny, ok := c.Get("role")
+	if !ok || roleAny.(string) != "super_admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+
+	// ambil siswa
+	var siswas []app.Siswa
+	if err := app.DB.Find(&siswas).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to fetch siswas",
+		})
+		return
+	}
+
+	resp := make([]siswaResp, 0, len(siswas))
+
+	for _, s := range siswas {
+		var user app.User
+		if err := app.DB.
+			Where("id = ?", s.UserID).
+			First(&user).Error; err != nil {
+			// skip jika user tidak ada (data rusak)
+			continue
+		}
+
+		resp = append(resp, siswaResp{
+			PublicID: s.PublicID,
+			Nama:     s.Nama,
+			Email:    user.Email,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total":  len(resp),
+		"siswas": resp,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\helpers.go =====
+package admin
+
+import (
+	"errors"
+
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+// ErrNoStanOwner returned when the user has no stan linked.
+var ErrNoStanOwner = errors.New("no stan found for this admin")
+
+// getUserIDFromContext extracts uint user_id set by JWT middleware.
+func getUserIDFromContext(c *gin.Context) (uint, bool) {
+	v, exists := c.Get("user_id")
+	if !exists {
+		return 0, false
+	}
+	uid, ok := v.(uint)
+	return uid, ok
+}
+
+// getUserFromContext mengambil user dari JWT middleware
+func getUserFromContext(c *gin.Context) (*app.User, bool) {
+	uid, ok := c.Get("user_id")
+	if !ok {
+		return nil, false
+	}
+
+	userID, ok := uid.(uint)
+	if !ok {
+		return nil, false
+	}
+
+	var user app.User
+	if err := app.DB.First(&user, userID).Error; err != nil {
+		return nil, false
+	}
+
+	return &user, true
+}
+
+// GetStanByCurrentUser finds the Stan associated with the current authenticated user.
+// Returns ErrNoStanOwner if not found.
+func GetStanByCurrentUser(c *gin.Context) (*app.Stan, error) {
+	uid, ok := getUserIDFromContext(c)
+	if !ok {
+		return nil, errors.New("user_id not found in context")
+	}
+
+	var stan app.Stan
+	if err := app.DB.Where("user_id = ?", uid).First(&stan).Error; err != nil {
+		return nil, ErrNoStanOwner
+	}
+	return &stan, nil
+}
+
+// requireStanOrAbort middleware helper: if no stan, returns 403.
+func requireStanOrAbort(c *gin.Context) (*app.Stan, bool) {
+	stan, err := GetStanByCurrentUser(c)
+	if err != nil {
+		if errors.Is(err, ErrNoStanOwner) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin has no stan"})
+			return nil, false
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return nil, false
+	}
+	return stan, true
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\import_siswa.go =====
+package admin
+
+import (
+	"bufio"
+	"encoding/csv"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+const (
+	siswaDomain      = "@smk_tlkm-mlg.com"
+	defaultPassword  = "password123"
+)
+
+func AdminImportSiswa(c *gin.Context) {
+	// defense-in-depth
+	roleAny, ok := c.Get("role")
+	if !ok || roleAny.(string) != "super_admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+	defer file.Close()
+
+	// detect CSV / TSV
+	reader := csv.NewReader(bufio.NewReader(file))
+	reader.TrimLeadingSpace = true
+
+	// default CSV delimiter
+	reader.Comma = ','
+
+	// peek first line to detect TSV
+	peek, err := reader.Read()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file"})
+		return
+	}
+	if len(peek) == 1 && strings.Contains(peek[0], "\t") {
+		reader.Comma = '\t'
+	}
+
+	// reset reader
+	file.Seek(0, io.SeekStart)
+	reader = csv.NewReader(bufio.NewReader(file))
+	if len(peek) == 1 && strings.Contains(peek[0], "\t") {
+		reader.Comma = '\t'
+	}
+
+	header, err := reader.Read()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid header"})
+		return
+	}
+
+	colIndex := -1
+	for i, h := range header {
+		if strings.ToLower(strings.TrimSpace(h)) == "nama_lengkap" {
+			colIndex = i
+			break
+		}
+	}
+
+	if colIndex == -1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "column 'nama_lengkap' not found"})
+		return
+	}
+
+	success := 0
+	skipped := 0
+	errors := []string{}
+
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || colIndex >= len(row) {
+			skipped++
+			continue
+		}
+
+		nama := strings.TrimSpace(row[colIndex])
+		if nama == "" {
+			skipped++
+			continue
+		}
+
+		parts := strings.Fields(strings.ToLower(nama))
+		if len(parts) < 2 {
+			skipped++
+			continue
+		}
+
+		email := parts[0] + "_" + parts[1] + siswaDomain
+
+		// check existing
+		var ex app.User
+		if err := app.DB.Where("email = ?", email).First(&ex).Error; err == nil {
+			skipped++
+			continue
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(defaultPassword), bcrypt.DefaultCost)
+		if err != nil {
+			errors = append(errors, email)
+			continue
+		}
+
+		user := app.User{
+			Email:              email,
+			PasswordHash:       string(hash),
+			Role:               "siswa",
+			MustChangePassword: true,
+		}
+
+		if err := app.DB.Create(&user).Error; err != nil {
+			errors = append(errors, email)
+			continue
+		}
+
+		// optional: create siswa profile
+		siswa := app.Siswa{
+			Nama: nama,
+			UserID:      user.ID,
+		}
+		_ = app.DB.Create(&siswa).Error
+
+		success++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"created": success,
+		"skipped": skipped,
+		"errors":  errors,
+		"default_password": defaultPassword,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\menus.go =====
+package admin
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payloads
+// =========================
+//
+
+type createMenuPayload struct {
+	NamaMakanan string  `json:"nama_makanan" binding:"required,min=1"`
+	Harga       float64 `json:"harga" binding:"required,gt=0"`
+	Jenis       string  `json:"jenis" binding:"required,oneof=makanan minuman"`
+	Deskripsi   string  `json:"deskripsi,omitempty"`
+}
+
+type updateMenuPayload struct {
+	NamaMakanan *string  `json:"nama_makanan,omitempty"`
+	Harga       *float64 `json:"harga,omitempty"`
+	Jenis       *string  `json:"jenis,omitempty"`
+	Deskripsi   *string  `json:"deskripsi,omitempty"`
+}
+
+//
+// =========================
+// CREATE MENU (ADMIN STAN)
+// =========================
+//
+
+func AdminCreateMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
+	var p createMenuPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	menu := app.Menu{
+		StanID:      stan.ID, // ðŸ”‘ IKAT KE STAN
+		NamaMakanan: p.NamaMakanan,
+		Harga:       p.Harga,
+		Jenis:       app.MenuJenis(p.Jenis),
+		Deskripsi:   p.Deskripsi,
+	}
+
+	if err := app.DB.Create(&menu).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create menu"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message":      "menu created",
+		"menu_id":      menu.PublicID,
+		"nama_makanan": menu.NamaMakanan,
+		"harga":        menu.Harga,
+		"jenis":        menu.Jenis,
+	})
+}
+
+//
+// =========================
+// LIST MENU (ADMIN STAN)
+// =========================
+//
+
+func AdminListMenus(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
+	var menus []app.Menu
+	if err := app.DB.
+		Where("stan_id = ?", stan.ID).
+		Order("created_at DESC").
+		Find(&menus).Error; err != nil {
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch menus"})
+		return
+	}
+
+	out := make([]gin.H, 0, len(menus))
+	for _, m := range menus {
+		out = append(out, gin.H{
+			"menu_id":      m.PublicID,
+			"nama_makanan": m.NamaMakanan,
+			"harga":        m.Harga,
+			"jenis":        m.Jenis,
+			"deskripsi":    m.Deskripsi,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"menus": out})
+}
+
+//
+// =========================
+// GET MENU DETAIL (ADMIN)
+// =========================
+//
+
+func AdminGetMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
+	pub := c.Param("id")
+
+	var menu app.Menu
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"menu_id":      menu.PublicID,
+		"nama_makanan": menu.NamaMakanan,
+		"harga":        menu.Harga,
+		"jenis":        menu.Jenis,
+		"deskripsi":    menu.Deskripsi,
+	})
+}
+
+//
+// =========================
+// UPDATE MENU (ADMIN)
+// =========================
+//
+
+func AdminUpdateMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
+	pub := c.Param("id")
+
+	var menu app.Menu
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
+		return
+	}
+
+	var p updateMenuPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if p.NamaMakanan != nil {
+		menu.NamaMakanan = *p.NamaMakanan
+	}
+	if p.Harga != nil {
+		menu.Harga = *p.Harga
+	}
+	if p.Jenis != nil {
+		menu.Jenis = app.MenuJenis(*p.Jenis)
+	}
+	if p.Deskripsi != nil {
+		menu.Deskripsi = *p.Deskripsi
+	}
+
+	if err := app.DB.Save(&menu).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update menu"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "menu updated",
+		"menu_id": menu.PublicID,
+	})
+}
+
+//
+// =========================
+// DELETE MENU (ADMIN)
+// =========================
+//
+
+func AdminDeleteMenu(c *gin.Context) {
+	stan, ok := requireStanOrAbort(c)
+	if !ok {
+		return
+	}
+
+	pub := c.Param("id")
+
+	var menu app.Menu
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", pub, stan.ID).
+		First(&menu).Error; err != nil {
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
+		return
+	}
+
+	if err := app.DB.Delete(&menu).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete menu"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "menu deleted"})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\orders.go =====
+package admin
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// HELPER STATUS LABEL (ADMIN)
+// =========================
+//
+
+func adminStatusLabel(s app.TransaksiStatus) string {
+	switch s {
+	case app.StatusBelumDikonfirm:
+		return "Menunggu konfirmasi"
+	case app.StatusDimasak:
+		return "Sedang dimasak"
+	case app.StatusDiantar:
+		return "Sedang diantar"
+	case app.StatusSampai:
+		return "Pesanan sudah sampai"
+	default:
+		return "Status tidak diketahui"
+	}
+}
+
+//
+// =========================
+// LIST ORDERS (ADMIN STAN)
+// =========================
+// GET /api/admin/orders
+//
+
+func AdminOrders(c *gin.Context) {
+	uidv, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID := uidv.(uint)
+
+	// ambil stan milik admin
+	var stan app.Stan
+	if err := app.DB.Where("user_id = ?", userID).First(&stan).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "stan not found"})
+		return
+	}
+
+	var trxs []app.Transaksi
+	if err := app.DB.
+		Where("stan_id = ?", stan.ID).
+		Preload("Details.Menu").
+		Order("created_at DESC").
+		Find(&trxs).Error; err != nil {
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch orders"})
+		return
+	}
+
+	out := make([]gin.H, 0, len(trxs))
+	for _, t := range trxs {
+		items := make([]gin.H, 0, len(t.Details))
+		var total float64
+
+		for _, d := range t.Details {
+			sub := float64(d.Qty) * d.HargaBeli
+			total += sub
+
+			items = append(items, gin.H{
+				"menu_id":      d.Menu.PublicID,
+				"nama_makanan": d.Menu.NamaMakanan,
+				"qty":          d.Qty,
+				"harga_beli":   app.Round2(d.HargaBeli),
+				"subtotal":     app.Round2(sub),
+			})
+		}
+
+		out = append(out, gin.H{
+			"transaksi_id": t.PublicID,
+
+			// STATUS
+			"status":       t.Status,
+			"status_label": adminStatusLabel(t.Status),
+
+			// WAKTU (UX)
+			"created_at":        t.CreatedAt,
+			"created_at_human": app.FormatTimeWithClock(t.CreatedAt),
+			"updated_at_human": app.FormatTimeWithClock(t.UpdatedAt),
+
+			// DATA
+			"total": app.Round2(total),
+			"items": items,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"stan_id": stan.PublicID,
+		"orders":  out,
+	})
+}
+
+//
+// =========================
+// UPDATE STATUS ORDER (ADMIN)
+// =========================
+// PATCH /api/admin/orders/:id/status
+//
+
+func AdminUpdateOrderStatus(c *gin.Context) {
+	trxPub := c.Param("id")
+	if trxPub == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing transaksi id"})
+		return
+	}
+
+	uidv, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID := uidv.(uint)
+
+	// cek stan admin
+	var stan app.Stan
+	if err := app.DB.Where("user_id = ?", userID).First(&stan).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "stan not found"})
+		return
+	}
+
+	var payload struct {
+		Status app.TransaksiStatus `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var trx app.Transaksi
+	if err := app.DB.
+		Where("public_id = ? AND stan_id = ?", trxPub, stan.ID).
+		First(&trx).Error; err != nil {
+
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "transaksi not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	// idempotent
+	if trx.Status == payload.Status {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "already in target status",
+			"status":  trx.Status,
+		})
+		return
+	}
+
+	// valid transitions
+	allowed := map[app.TransaksiStatus][]app.TransaksiStatus{
+		app.StatusBelumDikonfirm: {app.StatusDimasak},
+		app.StatusDimasak:        {app.StatusDiantar},
+		app.StatusDiantar:        {app.StatusSampai},
+	}
+
+	cur := trx.Status
+	target := payload.Status
+
+	valid := false
+	if nexts, ok := allowed[cur]; ok {
+		for _, n := range nexts {
+			if n == target {
+				valid = true
+				break
+			}
+		}
+	}
+	if !valid {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid status transition",
+			"from":  cur,
+			"to":    target,
+		})
+		return
+	}
+
+	res := app.DB.Model(&app.Transaksi{}).
+		Where("id = ? AND status = ?", trx.ID, trx.Status).
+		Updates(map[string]interface{}{
+			"status":     target,
+			"updated_at": time.Now(),
+		})
+
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
+		return
+	}
+	if res.RowsAffected == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "status already changed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "status updated",
+		"transaksi_id": trxPub,
+		"new_status":   target,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\register_stan.go =====
+package admin
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payload
+// =========================
+//
+
+type registerStanPayload struct {
+	Email       string `json:"email" binding:"required,email"`
+	Password    string `json:"password" binding:"required,min=6"`
+	NamaStan    string `json:"nama_stan" binding:"required"`
+	NamaPemilik string `json:"nama_pemilik" binding:"required"`
+	Telp        string `json:"telp,omitempty"`
+}
+
+//
+// =========================
+// Handler
+// =========================
+//
+
+// RegisterStan -> POST /api/admin/stan/register
+// ðŸ”’ ONLY super_admin (HARD CHECK)
+func RegisterStan(c *gin.Context) {
+	// =========================
+	// FINAL HARD GUARD
+	// =========================
+	roleAny, ok := c.Get("role")
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	role, ok := roleAny.(string)
+	if !ok || role != "super_admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+
+	// =========================
+	// PAYLOAD
+	// =========================
+	var p registerStanPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// =========================
+	// CHECK EMAIL UNIQUE
+	// =========================
+	var ex app.User
+	if err := app.DB.Where("email = ?", p.Email).First(&ex).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "email already exists"})
+		return
+	}
+
+	// =========================
+	// HASH PASSWORD
+	// =========================
+	hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+
+	// =========================
+	// CREATE USER (ADMIN STAN)
+	// =========================
+	user := app.User{
+		Email:              p.Email,
+		PasswordHash:       string(hash),
+		Role:               "admin_stan", // ðŸ”’ EXPLICIT STRING
+		MustChangePassword: true,
+	}
+
+	if err := app.DB.Create(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+		return
+	}
+
+	// =========================
+	// CREATE STAN
+	// =========================
+	stan := app.Stan{
+		NamaStan:    p.NamaStan,
+		NamaPemilik: p.NamaPemilik,
+		Telp:        p.Telp,
+		UserID:      user.ID,
+	}
+
+	if err := app.DB.Create(&stan).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create stan"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message":              "register stan success",
+		"user_id":              user.PublicID,
+		"stan_id":              stan.PublicID,
+		"email":                user.Email,
+		"must_change_password": user.MustChangePassword,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\rekap.go =====
+package admin
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+// GET /api/admin/reports/rekap
+// Rekap transaksi yang SUDAH SAMPAI (urut lama â†’ terbaru)
+func AdminRekapTransaksi(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	// ðŸ”‘ ambil stan berdasarkan user_id (JWT)
+	var stan app.Stan
+	if err := app.DB.
+		Where("user_id = ?", user.ID).
+		First(&stan).Error; err != nil {
+
+		c.JSON(http.StatusForbidden, gin.H{"error": "user is not admin stan"})
+		return
+	}
+
+	// =========================
+	// Ambil transaksi (HANYA yang sudah sampai)
+	// =========================
+	var transaksis []app.Transaksi
+	err := app.DB.
+		Preload("Details").
+		Where(
+			"stan_id = ? AND status = ?",
+			stan.ID,
+			app.StatusSampai,
+		).
+		Order("created_at ASC"). // TERLAMA â†’ TERBARU
+		Find(&transaksis).Error
+
+	if err != nil && err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch transactions"})
+		return
+	}
+
+	// =========================
+	// Hitung rekap
+	// =========================
+	var totalPemasukan float64
+	out := make([]gin.H, 0, len(transaksis))
+
+	for _, trx := range transaksis {
+		var totalTrx float64
+		for _, d := range trx.Details {
+			totalTrx += float64(d.Qty) * d.HargaBeli
+		}
+
+		totalPemasukan += totalTrx
+
+		out = append(out, gin.H{
+			"transaksi_id": trx.PublicID,
+			"tanggal":      trx.CreatedAt, // raw timestamp (aman)
+			"tanggal_real": trx.CreatedAt.Format("02 Jan 2006 15:04"),
+			"total":        app.Round2(totalTrx),
+		})
+	}
+
+	// =========================
+	// Response rapi
+	// =========================
+	c.JSON(http.StatusOK, gin.H{
+		"total_transaksi": len(transaksis),
+		"total_pemasukan": app.Round2(totalPemasukan),
+		"orders":          out, // urut lama â†’ terbaru
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\reports.go =====
+package admin
+
+import "github.com/gin-gonic/gin"
+
+func AdminMonthlyReport(c *gin.Context) {
+	c.JSON(200, gin.H{"msg": "admin monthly report OK"})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\admin\system.go =====
+package admin
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payload
+// =========================
+//
+
+type clearDBPayload struct {
+	Confirm string `json:"confirm" binding:"required"`
+}
+
+//
+// =========================
+// Handler
+// =========================
+//
+
+// AdminClearDatabase
+// POST /api/admin/system/clear-database
+// SUPER ADMIN ONLY
+func AdminClearDatabase(c *gin.Context) {
+	// defense-in-depth
+	roleAny, ok := c.Get("role")
+	if !ok || roleAny.(string) != "super_admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+
+	var p clearDBPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if p.Confirm != "DELETE_ALL_DATA" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid confirmation",
+			"hint":  "set confirm = DELETE_ALL_DATA",
+		})
+		return
+	}
+
+	db := app.DB
+
+	// DELETE instead of TRUNCATE to preserve super_admin
+	queries := []string{
+		"SET FOREIGN_KEY_CHECKS = 0",
+
+		// transaksi & keuangan
+		"DELETE FROM detail_transaksis",
+		"DELETE FROM wallet_transactions",
+		"DELETE FROM transaksis",
+
+		// bisnis
+		"DELETE FROM diskons",
+		"DELETE FROM menus",
+
+		// siswa & stan
+		"DELETE FROM siswas",
+		"DELETE FROM stans",
+
+		// users: KEEP super_admin
+		"DELETE FROM users WHERE role != 'super_admin'",
+
+		"SET FOREIGN_KEY_CHECKS = 1",
+	}
+
+	for _, q := range queries {
+		if err := db.Exec(q).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "failed to clear database",
+				"detail": err.Error(),
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "DATABASE CLEARED (super admin preserved)",
+		"warning": "this action is irreversible",
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\auth\login.go =====
+package auth
+
+import (
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payload & Response
+// =========================
+//
+
+type loginPayload struct {
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+type loginResp struct {
+	Token              string `json:"token"`
+	UserID             string `json:"user_id"` // public id
+	Role               string `json:"role"`
+	MustChangePassword bool   `json:"must_change_password"`
+	ExpiresAt          int64  `json:"expires_at"`
+	Email              string `json:"email"`
+}
+
+type loginClaims struct {
+	UserID   uint   `json:"user_id"`
+	PublicID string `json:"public_id"`
+	Role     string `json:"role"` // â›” hanya info, BUKAN source of truth
+	jwt.RegisteredClaims
+}
+
+//
+// =========================
+// JWT Helper
+// =========================
+//
+
+func getJWTSecret() []byte {
+	sec := os.Getenv("JWT_SECRET")
+	if sec == "" {
+		sec = "dev_jwt_secret_change_me"
+	}
+	return []byte(sec)
+}
+
+//
+// =========================
+// Login Handler
+// =========================
+// POST /api/auth/login
+// =========================
+//
+
+func Login(c *gin.Context) {
+	var p loginPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Cari user berdasarkan email
+	var u app.User
+	if err := app.DB.
+		Where("email = ?", p.Email).
+		First(&u).Error; err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	// Compare password
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(u.PasswordHash),
+		[]byte(p.Password),
+	); err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	// =========================
+	// BUILD JWT (SECURE)
+	// =========================
+	exp := time.Now().Add(24 * time.Hour)
+
+	claims := &loginClaims{
+		UserID:   u.ID,
+		PublicID: u.PublicID,
+		Role:     string(u.Role), // info only
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   u.PublicID, // ðŸ”’ KUNCI UTAMA (IDENTITY)
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(exp),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(getJWTSecret())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create token"})
+		return
+	}
+
+	// Response
+	c.JSON(http.StatusOK, loginResp{
+		Token:              signed,
+		UserID:             u.PublicID,
+		Role:               string(u.Role),
+		MustChangePassword: u.MustChangePassword,
+		ExpiresAt:          exp.Unix(),
+		Email:              u.Email,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\siswa\helpers.go =====
+package siswa
+
+import (
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+// getStanPublicIDByID returns stan.public_id
+func getStanPublicIDByID(id uint) string {
+	var pub string
+	app.DB.Table("stans").
+		Select("public_id").
+		Where("id = ?", id).
+		Scan(&pub)
+	return pub
+}
+
+// getStanNameByID returns stan.nama_stan
+func getStanNameByID(id uint) string {
+	var name string
+	app.DB.Table("stans").
+		Select("nama_stan").
+		Where("id = ?", id).
+		Scan(&name)
+	return name
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\siswa\menus.go =====
+package siswa
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// LIST MENUS (SISWA)
+// =========================
+//
+
+// GET /api/siswa/menus
+// optional: ?stan_id=<stan_public_id>
+func SiswaListMenus(c *gin.Context) {
+	stanPub := c.Query("stan_id")
+	db := app.DB
+
+	var menus []app.Menu
+
+	if stanPub != "" {
+		var stan app.Stan
+		if err := db.Where("public_id = ?", stanPub).First(&stan).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "stan not found"})
+			return
+		}
+
+		if err := db.
+			Where("stan_id = ?", stan.ID).
+			Find(&menus).Error; err != nil {
+
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch menus"})
+			return
+		}
+	} else {
+		if err := db.Find(&menus).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch menus"})
+			return
+		}
+	}
+
+	// ðŸ”‘ ambil diskon aktif (GLOBAL)
+	diskon := app.GetActiveDiscount()
+
+	out := make([]gin.H, 0, len(menus))
+	for _, m := range menus {
+		stanID := getStanPublicIDByID(m.StanID)
+		stanName := getStanNameByID(m.StanID)
+
+		price := app.Round2(m.Harga)
+		priceFinal := price
+
+		var diskonInfo interface{} = nil
+		if diskon != nil {
+			priceFinal = app.ApplyDiscount(price, diskon.Persentase)
+			diskonInfo = gin.H{
+				"nama":       diskon.Nama,
+				"persentase": diskon.Persentase,
+			}
+		}
+
+		out = append(out, gin.H{
+			"id":          m.PublicID,
+			"name":        m.NamaMakanan,
+			"description": m.Deskripsi,
+			"type":        m.Jenis,
+
+			"price":       price,
+			"price_final": priceFinal,
+			"diskon":      diskonInfo,
+
+			"stan": gin.H{
+				"id":   stanID,
+				"name": stanName,
+			},
+
+			"created_at":        m.CreatedAt,
+			"created_at_human": app.FormatTimeWithClock(m.CreatedAt),
+			"updated_at":        m.UpdatedAt,
+			"updated_at_human": app.FormatTimeWithClock(m.UpdatedAt),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"menus": out})
+}
+
+//
+// =========================
+// GET MENU DETAIL (SISWA)
+// =========================
+//
+
+// GET /api/siswa/menus/:id
+func SiswaGetMenu(c *gin.Context) {
+	pub := c.Param("id")
+	if pub == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing menu id"})
+		return
+	}
+
+	var m app.Menu
+	if err := app.DB.
+		Where("public_id = ?", pub).
+		First(&m).Error; err != nil {
+
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "menu not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch menu"})
+		return
+	}
+
+	stanID := getStanPublicIDByID(m.StanID)
+	stanName := getStanNameByID(m.StanID)
+
+	// ðŸ”‘ diskon aktif
+	diskon := app.GetActiveDiscount()
+
+	price := app.Round2(m.Harga)
+	priceFinal := price
+
+	var diskonInfo interface{} = nil
+	if diskon != nil {
+		priceFinal = app.ApplyDiscount(price, diskon.Persentase)
+		diskonInfo = gin.H{
+			"nama":       diskon.Nama,
+			"persentase": diskon.Persentase,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":          m.PublicID,
+		"name":        m.NamaMakanan,
+		"description": m.Deskripsi,
+		"type":        m.Jenis,
+
+		"price":       price,
+		"price_final": priceFinal,
+		"diskon":      diskonInfo,
+
+		"stan": gin.H{
+			"id":   stanID,
+			"name": stanName,
+		},
+
+		"created_at":        m.CreatedAt,
+		"created_at_human": app.FormatTimeWithClock(m.CreatedAt),
+		"updated_at":        m.UpdatedAt,
+		"updated_at_human": app.FormatTimeWithClock(m.UpdatedAt),
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\siswa\orders.go =====
+package siswa
+
+import (
+	// "log"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// HISTORI TRANSAKSI SISWA
+// =========================
+//
+
+func SiswaOrdersByMonth(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var siswa app.Siswa
+	if err := app.DB.
+		Where("user_id = ?", user.ID).
+		First(&siswa).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "user is not siswa"})
+		return
+	}
+
+	var trxs []app.Transaksi
+	err := app.DB.
+		Preload("Details.Menu").
+		Where("siswa_id = ?", siswa.ID).
+		Order("created_at DESC").
+		Find(&trxs).Error
+
+	if err != nil && err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch orders"})
+		return
+	}
+
+	out := make([]gin.H, 0, len(trxs))
+	for _, t := range trxs {
+		var total float64
+		items := make([]gin.H, 0, len(t.Details))
+
+		for _, d := range t.Details {
+			sub := float64(d.Qty) * d.HargaBeli
+			total += sub
+
+			items = append(items, gin.H{
+				"menu":       d.Menu.NamaMakanan,
+				"qty":        d.Qty,
+				"harga_beli": app.Round2(d.HargaBeli),
+				"subtotal":   app.Round2(sub),
+			})
+		}
+
+		out = append(out, gin.H{
+			"transaksi_id": t.PublicID,
+			"tanggal":      t.CreatedAt,
+			"tanggal_real": app.FormatTimeHuman(t.CreatedAt),
+			"status":       t.Status,
+			"total":        app.Round2(total),
+			"items":        items,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"orders": out})
+}
+
+//
+// =========================
+// CREATE ORDER (FINAL CLEAN)
+// =========================
+//
+func SiswaCreateOrder(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var p CreateOrderPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx := app.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var siswa app.Siswa
+	if err := tx.
+		Where("user_id = ?", user.ID).
+		First(&siswa).Error; err != nil {
+
+		tx.Rollback()
+		c.JSON(http.StatusForbidden, gin.H{"error": "user is not siswa"})
+		return
+	}
+
+	// ðŸ”‘ ambil diskon aktif SEKALI
+	diskon := app.GetActiveDiscount()
+
+	var stanID uint
+	var total float64
+	var details []app.DetailTransaksi
+
+	for _, it := range p.Items {
+		var menu app.Menu
+		if err := tx.
+			Where("public_id = ?", it.MenuID).
+			First(&menu).Error; err != nil {
+
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "menu not found"})
+			return
+		}
+
+		// âŒ campur stan tidak boleh
+		if stanID == 0 {
+			stanID = menu.StanID
+		} else if menu.StanID != stanID {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "mixed stans not allowed"})
+			return
+		}
+
+		// ðŸ’° harga final (apply diskon DI SINI)
+		harga := app.Round2(menu.Harga)
+		if diskon != nil {
+			harga = app.ApplyDiscount(harga, diskon.Persentase)
+		}
+
+		sub := float64(it.Qty) * harga
+		total += sub
+
+		details = append(details, app.DetailTransaksi{
+			MenuID:    menu.ID,
+			Qty:       it.Qty,
+			HargaBeli: harga, // ðŸ”¥ harga sudah diskon
+			CreatedAt: time.Now(),
+		})
+	}
+
+	trx := app.Transaksi{
+		PublicID: uuid.NewString(),
+		StanID:   stanID,
+		SiswaID:  siswa.ID,
+		Status:   app.StatusBelumDikonfirm,
+	}
+
+	if err := tx.Create(&trx).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create transaksi"})
+		return
+	}
+
+	for i := range details {
+		details[i].TransaksiID = trx.ID
+		if err := tx.Create(&details[i]).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create detail"})
+			return
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"transaksi_id": trx.PublicID,
+		"status":       trx.Status,
+		"total":        app.Round2(total),
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\siswa\payments.go =====
+package siswa
+
+import (
+	// "log"
+	"net/http"
+	// "strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	// "gorm.io/gorm/clause"
+
+	"github.com/google/uuid"
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+// Order payload
+type OrderItemPayload struct {
+	MenuID string `json:"menu_id" binding:"required"`
+	Qty    int    `json:"qty" binding:"required,gt=0"`
+}
+type CreateOrderPayload struct {
+	Items         []OrderItemPayload `json:"items" binding:"required,min=1"`
+	PaymentMethod string             `json:"payment_method" binding:"required,oneof=wallet cash"`
+	// optional: client can send idempotency key header instead
+	IdempotencyKey *string `json:"idempotency_key,omitempty"`
+}
+
+// GET /api/siswa/wallet - get current user's saldo
+func SiswaGetWallet(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var u app.User
+	if err := app.DB.Select("saldo").Where("id = ?", user.ID).First(&u).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch saldo"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"saldo": u.Saldo})
+}
+
+// POST /api/siswa/topup - admin/operator topup (for quick testing or manual topup)
+func SiswaTopupByAdmin(c *gin.Context) {
+	var payload struct {
+		UserPublicID string  `json:"user_public_id" binding:"required"`
+		Amount       float64 `json:"amount" binding:"required,gt=0"`
+		Note         string  `json:"note,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var user app.User
+	if err := app.DB.Where("public_id = ?", payload.UserPublicID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	tx := app.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Model(&app.User{}).Where("id = ?", user.ID).UpdateColumn("saldo", gorm.Expr("saldo + ?", payload.Amount)).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to topup"})
+		return
+	}
+
+	wtx := app.WalletTransaction{
+		PublicID:  uuid.NewString(),
+		UserID:    user.ID,
+		Amount:    payload.Amount,
+		Type:      "topup",
+		Note:      payload.Note,
+		CreatedAt: time.Now(),
+	}
+	if err := tx.Create(&wtx).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record wallet tx"})
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "topup successful"})
+}
+
+// robust getUserFromContext: accepts either *app.User, numeric user id (uint/float64) or public_id string.
+func getUserFromContext(c *gin.Context) (*app.User, bool) {
+	// 1) direct *app.User stored (future-proof)
+	if v, ok := c.Get("user"); ok {
+		if u, ok2 := v.(*app.User); ok2 {
+			return u, true
+		}
+	}
+
+	// 2) middleware sets numeric user_id (uint) under "user_id"
+	if v, ok := c.Get("user_id"); ok {
+		switch idv := v.(type) {
+		case uint:
+			var u app.User
+			if err := app.DB.Preload("Siswa").Where("id = ?", idv).First(&u).Error; err == nil {
+				return &u, true
+			}
+		case int:
+			var u app.User
+			if err := app.DB.Preload("Siswa").Where("id = ?", idv).First(&u).Error; err == nil {
+				return &u, true
+			}
+		case float64: // sometimes JSON decodes numbers as float64
+			var u app.User
+			if err := app.DB.Preload("Siswa").Where("id = ?", uint(idv)).First(&u).Error; err == nil {
+				return &u, true
+			}
+		}
+	}
+
+	// 3) middleware sets public_id under "public_id"
+	if v, ok := c.Get("public_id"); ok {
+		if pid, ok2 := v.(string); ok2 && pid != "" {
+			var u app.User
+			if err := app.DB.Preload("Siswa").Where("public_id = ?", pid).First(&u).Error; err == nil {
+				return &u, true
+			}
+		}
+	}
+
+	// 4) middleware might set claims under "claims" or "jwt_claims"
+	if v, ok := c.Get("claims"); ok {
+		if m, ok2 := v.(map[string]interface{}); ok2 {
+			if idf, ok := m["user_id"]; ok {
+				switch idvv := idf.(type) {
+				case float64:
+					var u app.User
+					if err := app.DB.Preload("Siswa").Where("id = ?", uint(idvv)).First(&u).Error; err == nil {
+						return &u, true
+					}
+				case string:
+					var u app.User
+					if err := app.DB.Preload("Siswa").Where("public_id = ?", idvv).First(&u).Error; err == nil {
+						return &u, true
+					}
+				}
+			}
+		}
+	}
+
+	return nil, false
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\siswa\struk.go =====
+package siswa
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-pdf/fpdf"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+// GET /api/siswa/orders/:id/receipt/pdf
+// Generate struk / nota dalam bentuk PDF
+func SiswaGetOrderReceiptPDF(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	transaksiID := c.Param("id")
+	if transaksiID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "transaksi id required"})
+		return
+	}
+
+	// ðŸ”‘ Ambil siswa dari user_id
+	var siswa app.Siswa
+	if err := app.DB.
+		Where("user_id = ?", user.ID).
+		First(&siswa).Error; err != nil {
+
+		c.JSON(http.StatusForbidden, gin.H{"error": "user is not siswa"})
+		return
+	}
+
+	// Ambil transaksi + detail + menu (pastikan milik siswa ini)
+	var trx app.Transaksi
+	if err := app.DB.
+		Preload("Details.Menu").
+		Where("public_id = ? AND siswa_id = ?", transaksiID, siswa.ID).
+		First(&trx).Error; err != nil {
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "transaction not found"})
+		return
+	}
+
+	// Ambil stan
+	var stan app.Stan
+	_ = app.DB.Where("id = ?", trx.StanID).First(&stan)
+
+	// =========================
+	// PDF SETUP
+	// =========================
+
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(15, 15, 15)
+	pdf.AddPage()
+
+	// Judul
+	pdf.SetFont("Arial", "B", 16)
+	pdf.Cell(0, 10, "STRUK PEMBELIAN")
+	pdf.Ln(12)
+
+	// Info transaksi
+	pdf.SetFont("Arial", "", 11)
+	pdf.Cell(0, 7, "Nama Siswa : "+siswa.Nama)
+	pdf.Ln(6)
+	pdf.Cell(0, 7, "Stan       : "+stan.NamaStan)
+	pdf.Ln(6)
+	pdf.Cell(0, 7, "Tanggal    : "+formatTanggalStruk(trx.CreatedAt))
+	pdf.Ln(6)
+	pdf.Cell(0, 7, "Status     : "+string(trx.Status))
+	pdf.Ln(10)
+
+	// Header tabel
+	pdf.SetFont("Arial", "B", 11)
+	pdf.CellFormat(80, 8, "Menu", "1", 0, "", false, 0, "")
+	pdf.CellFormat(20, 8, "Qty", "1", 0, "C", false, 0, "")
+	pdf.CellFormat(40, 8, "Harga", "1", 0, "R", false, 0, "")
+	pdf.CellFormat(40, 8, "Subtotal", "1", 1, "R", false, 0, "")
+
+	pdf.SetFont("Arial", "", 11)
+
+	var total float64
+
+	for _, d := range trx.Details {
+		sub := float64(d.Qty) * d.HargaBeli
+		total += sub
+
+		pdf.CellFormat(80, 8, d.Menu.NamaMakanan, "1", 0, "", false, 0, "")
+		pdf.CellFormat(20, 8, strconv.Itoa(d.Qty), "1", 0, "C", false, 0, "")
+		pdf.CellFormat(40, 8, formatRupiah(d.HargaBeli), "1", 0, "R", false, 0, "")
+		pdf.CellFormat(40, 8, formatRupiah(sub), "1", 1, "R", false, 0, "")
+	}
+
+	// Total
+	pdf.SetFont("Arial", "B", 11)
+	pdf.CellFormat(140, 8, "TOTAL", "1", 0, "R", false, 0, "")
+	pdf.CellFormat(40, 8, formatRupiah(total), "1", 1, "R", false, 0, "")
+
+	// Output PDF ke buffer
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate pdf"})
+		return
+	}
+
+	c.Header("Content-Type", "application/pdf")
+	c.Header(
+		"Content-Disposition",
+		"inline; filename=struk-"+trx.PublicID+".pdf",
+	)
+	c.Data(http.StatusOK, "application/pdf", buf.Bytes())
+}
+
+// =========================
+// HELPER (KHUSUS STRUK)
+// =========================
+
+// formatTanggalStruk mengembalikan tanggal absolut (BUKAN relative)
+// Contoh: "13 Jan 2026 20:39 WIB"
+func formatTanggalStruk(t time.Time) string {
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err == nil {
+		t = t.In(loc)
+	}
+	return t.Format("02 Jan 2006 15:04") + " WIB"
+}
+
+// formatRupiah format angka jadi mata uang sederhana
+func formatRupiah(v float64) string {
+	return fmt.Sprintf("Rp %.2f", app.Round2(v))
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\user\register.go =====
+package user
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// Payload
+// =========================
+//
+
+type registerPayload struct {
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required,min=6"`
+	Nama     string `json:"nama_lengkap" binding:"required"`
+}
+
+//
+// =========================
+// REGISTER SISWA
+// =========================
+//
+
+// RegisterUser -> POST /api/auth/register
+// Public endpoint: ONLY for siswa
+func RegisterUser(c *gin.Context) {
+	var p registerPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// hash password
+	hashed, err := bcrypt.GenerateFromPassword([]byte(p.Password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("[REGISTER] bcrypt error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+
+	tx := app.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// create user (role fixed: siswa)
+	u := app.User{
+		Email:              p.Email,
+		PasswordHash:       string(hashed),
+		Role:               app.RoleSiswa,
+		MustChangePassword: false,
+	}
+
+	if err := tx.Create(&u).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
+		return
+	}
+
+	// create siswa profile
+	s := app.Siswa{
+		Nama:   p.Nama,
+		UserID: u.ID,
+	}
+
+	if err := tx.Create(&s).Error; err != nil {
+		tx.Rollback()
+		log.Printf("[REGISTER] failed create siswa: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create siswa profile"})
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "register success",
+		"user_id": u.PublicID,
+		"email":   u.Email,
+		"role":    u.Role,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\get_all_stan.go =====
+package api
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+func AdminGetAllStan(c *gin.Context) {
+	var stans []app.Stan
+
+	if err := app.DB.Find(&stans).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	type StanResponse struct {
+		StanID      string `json:"stan_id"`
+		NamaStan    string `json:"nama_stan"`
+		NamaPemilik string `json:"nama_pemilik"`
+		Telp        string `json:"telp"`
+		UserID      uint   `json:"user_id"`
+	}
+
+	var resp []StanResponse
+
+	for _, s := range stans {
+		resp = append(resp, StanResponse{
+			StanID:      s.PublicID,
+			NamaStan:    s.NamaStan,
+			NamaPemilik: s.NamaPemilik,
+			Telp:        s.Telp,
+			UserID:      s.UserID,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"stans": resp,
+	})
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\middleware.go =====
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+)
+
+//
+// =========================
+// JWT Secret
+// =========================
+//
+
+func jwtSecret() []byte {
+	sec := os.Getenv("JWT_SECRET")
+	if sec == "" {
+		// dev fallback only
+		sec = "dev_jwt_secret_change_me"
+	}
+	return []byte(sec)
+}
+
+//
+// =========================
+// JWT Middleware (SECURE)
+// =========================
+//
+// Prinsip:
+// - JWT hanya bukti identitas
+// - Role diambil dari DATABASE
+// - Payload JWT TIDAK dipercaya
+//
+
+func JWTAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.GetHeader("Authorization")
+		if h == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "authorization header required",
+			})
+			return
+		}
+
+		parts := strings.Fields(h)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid authorization header",
+			})
+			return
+		}
+		tokenStr := parts[1]
+
+		claims := &jwt.RegisteredClaims{}
+
+		token, err := jwt.ParseWithClaims(
+			tokenStr,
+			claims,
+			func(t *jwt.Token) (interface{}, error) {
+				// ðŸ”’ HARD CHECK SIGNING METHOD
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
+				return jwtSecret(), nil
+			},
+		)
+
+		if err != nil || !token.Valid {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid or tampered token",
+			})
+			return
+		}
+
+		// =========================
+		// VALIDATE SUBJECT
+		// =========================
+		if claims.Subject == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid token subject",
+			})
+			return
+		}
+
+		// =========================
+		// LOAD USER FROM DATABASE
+		// =========================
+		var user app.User
+		if err := app.DB.
+			Where("public_id = ?", claims.Subject).
+			First(&user).Error; err != nil {
+
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "user not found",
+			})
+			return
+		}
+
+		// =========================
+		// SET CONTEXT (SAFE)
+		// =========================
+		c.Set("user_id", user.ID)
+		c.Set("public_id", user.PublicID)
+		c.Set("role", fmt.Sprintf("%v", user.Role)) // â¬…ï¸ EXPLICIT STRING CONVERSION
+
+		c.Next()
+	}
+}
+
+//
+// =========================
+// ROLE GUARD (STRING-BASED, AMAN)
+// =========================
+//
+
+func RequireRole(expected string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rv, ok := c.Get("role")
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
+			return
+		}
+
+		role, ok := rv.(string)
+		if !ok || role != expected {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// =========================
+// SUPER ADMIN GUARD (HARD)
+// =========================
+func RequireSuperAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rv, ok := c.Get("role")
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
+			return
+		}
+
+		role, ok := rv.(string)
+		if !ok || role != "super_admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "super admin only",
+			})
+			return
+		}
+
+		c.Next()
+	}
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\api\wrappers.go =====
+package api
+
+import (
+	"github.com/gin-gonic/gin"
+
+	adminpkg "github.com/samudsamudra/UKK_kantin/internal/api/admin"
+	authpkg "github.com/samudsamudra/UKK_kantin/internal/api/auth"
+	siswapkg "github.com/samudsamudra/UKK_kantin/internal/api/siswa"
+	userpkg "github.com/samudsamudra/UKK_kantin/internal/api/user"
+)
+
+// --- auth / user ---
+func RegisterUser(c *gin.Context) { userpkg.RegisterUser(c) }
+func Login(c *gin.Context)        { authpkg.Login(c) }
+
+// --- siswa ---
+func SiswaListMenus(c *gin.Context)   { siswapkg.SiswaListMenus(c) }
+func SiswaCreateOrder(c *gin.Context) { siswapkg.SiswaCreateOrder(c) }
+
+// func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
+// func SiswaGetReceiptPDF(c *gin.Context) { siswapkg.SiswaGetReceiptPDF(c) }
+func SiswaGetMenu(c *gin.Context)            { siswapkg.SiswaGetMenu(c) }
+func SiswaGetOrderReceiptPDF(c *gin.Context) { siswapkg.SiswaGetOrderReceiptPDF(c) }
+
+// --- admin / stan (menus) ---
+func AdminCreateMenu(c *gin.Context) { adminpkg.AdminCreateMenu(c) }
+func AdminUpdateMenu(c *gin.Context) { adminpkg.AdminUpdateMenu(c) }
+func AdminDeleteMenu(c *gin.Context) { adminpkg.AdminDeleteMenu(c) }
+func AdminListMenus(c *gin.Context)  { adminpkg.AdminListMenus(c) }
+func AdminGetMenu(c *gin.Context)    { adminpkg.AdminGetMenu(c) }
+
+// --- admin / stan (discounts) ---
+func AdminCreateDiscount(c *gin.Context) { adminpkg.AdminCreateDiscount(c) }
+func AdminListDiscounts(c *gin.Context)  { adminpkg.AdminListDiscounts(c) }
+func AdminGetDiscount(c *gin.Context)    { adminpkg.AdminGetDiscount(c) }
+func AdminUpdateDiscount(c *gin.Context) { adminpkg.AdminUpdateDiscount(c) }
+func AdminDeleteDiscount(c *gin.Context) { adminpkg.AdminDeleteDiscount(c) }
+
+// --- admin / stan (orders & reports) ---
+func AdminUpdateOrderStatus(c *gin.Context) { adminpkg.AdminUpdateOrderStatus(c) }
+func AdminMonthlyReport(c *gin.Context)     { adminpkg.AdminMonthlyReport(c) }
+func AdminRekapTransaksi(c *gin.Context)    { adminpkg.AdminRekapTransaksi(c) }
+
+// --- admin / stan (stan management) ---
+func RegisterStan(c *gin.Context) { adminpkg.RegisterStan(c) }
+
+func SiswaGetWallet(c *gin.Context)    { siswapkg.SiswaGetWallet(c) }
+func SiswaTopupByAdmin(c *gin.Context) { siswapkg.SiswaTopupByAdmin(c) }
+
+func SiswaOrdersByMonth(c *gin.Context) { siswapkg.SiswaOrdersByMonth(c) }
+func AdminOrders(c *gin.Context)        { adminpkg.AdminOrders(c) }
+
+func AdminClearDatabase(c *gin.Context) {
+	adminpkg.AdminClearDatabase(c)
+}
+
+// --- system (super admin) ---
+func AdminImportSiswa(c *gin.Context) {
+	adminpkg.AdminImportSiswa(c)
+}
+// --- system (super admin) ---
+func AdminGetAllSiswas(c *gin.Context) {
+	adminpkg.AdminGetAllSiswas(c)
+}
+
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\app\db.go =====
+package app
+
+import (
+	"log"
+	"os"
+
+	gormMySQL "gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+var DB *gorm.DB
+
+func InitDB() {
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		log.Fatal("DB_DSN is not set")
+	}
+
+	db, err := gorm.Open(gormMySQL.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		log.Fatalf("failed to connect database: %v", err)
+	}
+
+	DB = db
+	log.Println("database connected")
+}
+
+func RunMigrations() {
+	if DB == nil {
+		log.Fatal("DB is nil; InitDB must be called first")
+	}
+
+	err := DB.AutoMigrate(
+		&User{},
+		&Siswa{},
+		&Stan{},
+		&Menu{},
+		&Diskon{},
+		&Transaksi{},
+		&DetailTransaksi{},
+		&WalletTransaction{},
+	)
+	if err != nil {
+		log.Fatalf("migration failed: %v", err)
+	}
+
+	log.Println("migrations completed")
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\app\models.go =====
+package app
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+//
+// =========================
+// ENUMS
+// =========================
+//
+
+type UserRole string
+
+const (
+	RoleSuperAdmin UserRole = "super_admin"
+	RoleAdminStan  UserRole = "admin_stan"
+	RoleSiswa      UserRole = "siswa"
+)
+
+type MenuJenis string
+
+const (
+	JenisMakanan MenuJenis = "makanan"
+	JenisMinuman MenuJenis = "minuman"
+)
+
+type TransaksiStatus string
+
+const (
+	StatusBelumDikonfirm TransaksiStatus = "belum dikonfirm"
+	StatusDimasak        TransaksiStatus = "dimasak"
+	StatusDiantar        TransaksiStatus = "diantar"
+	StatusSampai         TransaksiStatus = "sampai"
+)
+
+//
+// =========================
+// USER (BASE IDENTITY)
+// =========================
+//
+
+type User struct {
+	ID                 uint      `gorm:"primaryKey" json:"-"`
+	PublicID           string    `gorm:"size:36;uniqueIndex;not null" json:"user_id"`
+	Email              string    `gorm:"size:150;uniqueIndex;not null" json:"email"`
+	PasswordHash       string    `gorm:"size:255;not null" json:"-"`
+	Role               UserRole  `gorm:"size:50;not null" json:"role"`
+	MustChangePassword bool      `gorm:"default:true" json:"must_change_password"`
+	CreatedBy          *uint     `gorm:"index" json:"-"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	Saldo     float64   `gorm:"type:decimal(15,2);default:0"`
+
+	Siswa *Siswa `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;foreignKey:UserID"`
+
+	Stan  *Stan  `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;foreignKey:UserID"`
+}
+
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+	if u.PublicID == "" {
+		u.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+//
+// =========================
+// SISWA
+// =========================
+//
+
+type Siswa struct {
+	ID        uint      `gorm:"primaryKey" json:"-"`
+	PublicID  string    `gorm:"size:36;uniqueIndex;not null" json:"siswa_id"`
+	Nama      string    `gorm:"size:150;not null" json:"nama_lengkap"`
+	UserID    uint      `gorm:"uniqueIndex;not null" json:"-"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (s *Siswa) BeforeCreate(tx *gorm.DB) error {
+	if s.PublicID == "" {
+		s.PublicID = uuid.NewString()
+	}
+	return nil
+	
+}
+
+//
+// =========================
+// STAN (ADMIN STAN)
+// =========================
+//
+
+type Stan struct {
+	ID          uint      `gorm:"primaryKey"`
+	PublicID    string    `gorm:"size:36;uniqueIndex"`
+	NamaStan    string    `gorm:"size:100"`
+	NamaPemilik string    `gorm:"size:100"`
+	Telp        string    `gorm:"size:20"`
+	UserID      uint
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+
+func (s *Stan) BeforeCreate(tx *gorm.DB) error {
+	if s.PublicID == "" {
+		s.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+//
+// =========================
+// MENU
+// =========================
+//
+
+type Menu struct {
+	ID          uint      `gorm:"primaryKey"`
+	PublicID    string    `gorm:"size:36;uniqueIndex"`
+	NamaMakanan string    `gorm:"size:100"`
+	Harga       float64
+	Jenis       MenuJenis
+	Deskripsi   string
+	StanID      uint
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+
+func (m *Menu) BeforeCreate(tx *gorm.DB) error {
+	if m.PublicID == "" {
+		m.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+//
+// =========================
+// DISKON
+// =========================
+//
+
+type Diskon struct {
+	ID               uint       `gorm:"primaryKey" json:"-"`
+	PublicID         string     `gorm:"size:36;uniqueIndex;not null" json:"diskon_id"`
+	Nama             string     `gorm:"size:100;not null" json:"nama"`
+	Persentase       float64    `gorm:"not null" json:"persentase"` // 0â€“100
+	TanggalAwal      *time.Time `gorm:"index" json:"tanggal_awal"`
+	TanggalAkhir     *time.Time `gorm:"index" json:"tanggal_akhir"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (d *Diskon) BeforeCreate(tx *gorm.DB) error {
+	if d.PublicID == "" {
+		d.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+//
+// =========================
+// TRANSAKSI
+// =========================
+//
+
+type Transaksi struct {
+	ID        uint            `gorm:"primaryKey" json:"-"`
+	PublicID  string          `gorm:"size:36;uniqueIndex;not null" json:"transaksi_id"`
+	StanID    uint            `gorm:"index;not null" json:"-"`
+	SiswaID   uint            `gorm:"index;not null" json:"-"`
+	Status    TransaksiStatus `gorm:"size:50;not null" json:"status"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	Details []DetailTransaksi `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;foreignKey:TransaksiID"`
+}
+
+func (t *Transaksi) BeforeCreate(tx *gorm.DB) error {
+	if t.PublicID == "" {
+		t.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+//
+// =========================
+// DETAIL TRANSAKSI
+// =========================
+//
+
+type DetailTransaksi struct {
+	ID          uint      `gorm:"primaryKey" json:"-"`
+	TransaksiID uint      `gorm:"index;not null" json:"-"`
+	MenuID      uint      `gorm:"index;not null" json:"-"`
+	Qty         int       `gorm:"not null" json:"qty"`
+	HargaBeli   float64   `gorm:"not null" json:"harga_beli"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+
+	Menu Menu `gorm:"foreignKey:MenuID"`
+}
+
+//
+// =========================
+// WALLET (OPTIONAL / FUTURE)
+// =========================
+//
+
+type WalletTransaction struct {
+	ID        uint      `gorm:"primaryKey" json:"-"`
+	PublicID  string    `gorm:"size:36;uniqueIndex;not null" json:"wallet_tx_id"`
+	UserID    uint      `gorm:"index;not null" json:"-"`
+	Amount    float64   `gorm:"not null" json:"amount"`
+	Type      string    `gorm:"size:50;not null" json:"type"` // topup | debit
+	Note      string    `gorm:"type:text" json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (w *WalletTransaction) BeforeCreate(tx *gorm.DB) error {
+	if w.PublicID == "" {
+		w.PublicID = uuid.NewString()
+	}
+	return nil
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\app\utils.go =====
+package app
+
+import (
+	"fmt"
+	"math"
+	"time"
+)
+
+// Round2 membulatkan float ke 2 desimal
+func Round2(f float64) float64 {
+	return math.Round(f*100) / 100
+}
+
+// FormatTimeHuman mengembalikan representasi human-friendly untuk waktu.
+// - jika dalam range +/-24 jam -> relative (mis. "7 menit lalu" / "in 2 hours")
+// - jika di luar -> format pendek "02 Jan 2006 15:04" (waktu lokal Asia/Jakarta)
+func FormatTimeHuman(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+
+	// convert to Jakarta timezone
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err == nil {
+		t = t.In(loc)
+	}
+
+	now := time.Now().In(t.Location())
+	diff := now.Sub(t)
+
+	// future
+	if diff < 0 {
+		// abs duration
+		abs := -diff
+		switch {
+		case abs < time.Minute:
+			return "sebentar lagi"
+		case abs < time.Hour:
+			return fmt.Sprintf("dalam %d menit", int(abs.Minutes()))
+		case abs < 24*time.Hour:
+			return fmt.Sprintf("dalam %d jam", int(abs.Hours()))
+		default:
+			return t.Format("02 Jan 2006 15:04")
+		}
+	}
+
+	// past
+	switch {
+	case diff < time.Minute:
+		return "baru saja"
+	case diff < time.Hour:
+		return fmt.Sprintf("%d menit lalu", int(diff.Minutes()))
+	case diff < 24*time.Hour:
+		return fmt.Sprintf("%d jam lalu", int(diff.Hours()))
+	default:
+		return t.Format("02 Jan 2006 15:04")
+	}
+}
+
+// FormatTimePretty returns a short human-friendly representation for a *time.Time.
+// If t is nil, returns empty string. This reuses FormatTimeHuman.
+func FormatTimePretty(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return FormatTimeHuman((*t).In(time.FixedZone("WIB", 7*3600)))
+}
+
+// FormatISOOrNil returns RFC3339 UTC string or nil if t is nil.
+// Return type is interface{} so when marshalled to JSON it becomes null when nil.
+func FormatISOOrNil(t *time.Time) interface{} {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+// FormatTimeWithClock returns:
+// "12:05 (5 menit lalu)" or "12:05 (baru saja)"
+// If older than 24h, fallback to full date.
+func FormatTimeWithClock(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err == nil {
+		t = t.In(loc)
+	}
+
+	now := time.Now().In(t.Location())
+	diff := now.Sub(t)
+
+	clock := t.Format("15:04")
+
+	// future
+	if diff < 0 {
+		abs := -diff
+		switch {
+		case abs < time.Minute:
+			return clock + " (sebentar lagi)"
+		case abs < time.Hour:
+			return clock + " (dalam " + fmt.Sprintf("%d", int(abs.Minutes())) + " menit)"
+		case abs < 24*time.Hour:
+			return clock + " (dalam " + fmt.Sprintf("%d", int(abs.Hours())) + " jam)"
+		default:
+			return t.Format("02 Jan 2006 15:04")
+		}
+	}
+
+	// past
+	switch {
+	case diff < time.Minute:
+		return clock + " (baru saja)"
+	case diff < time.Hour:
+		return clock + " (" + fmt.Sprintf("%d", int(diff.Minutes())) + " menit lalu)"
+	case diff < 24*time.Hour:
+		return clock + " (" + fmt.Sprintf("%d", int(diff.Hours())) + " jam lalu)"
+	default:
+		return t.Format("02 Jan 2006 15:04")
+	}
+}
+// =========================
+// DISCOUNT HELPERS (UKK)
+// =========================
+
+// GetActiveDiscount mengambil 1 diskon aktif (GLOBAL).
+// Diskon aktif jika:
+// - tanggal_awal NULL atau <= sekarang
+// - tanggal_akhir NULL atau >= sekarang
+// Jika tidak ada, return nil.
+func GetActiveDiscount() *Diskon {
+	var d Diskon
+	now := time.Now().UTC()
+
+	err := DB.
+		Where(
+			"(tanggal_awal IS NULL OR tanggal_awal <= ?) AND (tanggal_akhir IS NULL OR tanggal_akhir >= ?)",
+			now, now,
+		).
+		Order("created_at DESC").
+		First(&d).Error
+
+	if err != nil {
+		return nil
+	}
+	return &d
+}
+
+// ApplyDiscount menghitung harga setelah diskon persen
+func ApplyDiscount(price float64, percent float64) float64 {
+	if percent <= 0 {
+		return Round2(price)
+	}
+	disc := price * (percent / 100)
+	return Round2(price - disc)
+}
+// FormatDateID formats date into Indonesian human-readable date.
+// short = true  -> "17 Jan 2026"
+// short = false -> "17 Januari 2026"
+func FormatDateID(t *time.Time, short bool) string {
+	if t == nil {
+		return ""
+	}
+
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err == nil {
+		t = func(tt time.Time) *time.Time {
+			lt := tt.In(loc)
+			return &lt
+		}(*t)
+	}
+
+	day := t.Day()
+	year := t.Year()
+
+	monthsFull := []string{
+		"Januari", "Februari", "Maret", "April", "Mei", "Juni",
+		"Juli", "Agustus", "September", "Oktober", "November", "Desember",
+	}
+	monthsShort := []string{
+		"Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+		"Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+	}
+
+	month := ""
+	if short {
+		month = monthsShort[int(t.Month())-1]
+	} else {
+		month = monthsFull[int(t.Month())-1]
+	}
+
+	return fmt.Sprintf("%d %s %d", day, month, year)
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\routes\routes.go =====
+package routes
+
+import (
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/samudsamudra/UKK_kantin/internal/api"
+)
+
+//
+// =========================
+// Middleware Helpers
+// =========================
+//
+
+// simpleRateLimiter limits requests per IP in a fixed window.
+// NOTE: This is sufficient for UKK / demo purpose (in-memory).
+func simpleRateLimiter(max int, window time.Duration) gin.HandlerFunc {
+	type entry struct {
+		count     int
+		expiresAt time.Time
+	}
+
+	store := map[string]*entry{}
+
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		e, ok := store[ip]
+
+		if !ok || time.Now().After(e.expiresAt) {
+			store[ip] = &entry{
+				count:     1,
+				expiresAt: time.Now().Add(window),
+			}
+		} else {
+			e.count++
+			if e.count > max {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+					"error": "too many requests",
+				})
+				return
+			}
+		}
+		c.Next()
+	}
+}
+
+// requireJSON enforces application/json for write methods
+// and limits request body size.
+func requireJSON(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Method == http.MethodPost ||
+			c.Request.Method == http.MethodPut ||
+			c.Request.Method == http.MethodPatch {
+
+			if !strings.HasPrefix(c.GetHeader("Content-Type"), "application/json") {
+				c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{
+					"error": "content-type must be application/json",
+				})
+				return
+			}
+			c.Request.Body = http.MaxBytesReader(
+				c.Writer,
+				c.Request.Body,
+				maxBytes,
+			)
+		}
+		c.Next()
+	}
+}
+
+//
+// =========================
+// Route Registration
+// =========================
+//
+
+func Register(r *gin.Engine) {
+	// root API group
+	apiGroup := r.Group("/api")
+
+	// rate limit tetap global
+	apiGroup.Use(simpleRateLimiter(200, time.Minute))
+
+	// =========================
+	// AUTH
+	// =========================
+	apiGroup.POST(
+		"/auth/register",
+		simpleRateLimiter(5, 2*time.Minute),
+		api.RegisterUser,
+	)
+	apiGroup.POST(
+		"/auth/login",
+		simpleRateLimiter(10, time.Minute),
+		api.Login,
+	)
+
+	// =========================
+	// SISWA
+	// =========================
+	siswa := apiGroup.Group("/siswa")
+
+	// public endpoints (no auth)
+	siswa.GET("/menus", api.SiswaListMenus)
+	siswa.GET("/menus/:id", api.SiswaGetMenu)
+
+	// protected siswa endpoints
+	siswaAuth := siswa.Group("")
+	siswaAuth.Use(api.JWTAuth(), api.RequireRole("siswa"))
+	{
+		// wallet
+		siswaAuth.GET("/wallet", api.SiswaGetWallet)
+
+		// order
+		siswaAuth.POST("/order", api.SiswaCreateOrder)
+
+		// GET /api/siswa/orders?month=YYYY-MM
+		siswaAuth.GET("/orders", api.SiswaOrdersByMonth)
+
+		// receipt
+		siswaAuth.GET("/orders/:id/receipt/pdf", api.SiswaGetOrderReceiptPDF)
+
+		// (UKK opsional lanjutan)
+		// siswaAuth.GET("/orders/:id/receipt", api.SiswaGetReceipt)
+	}
+
+	// =========================
+	// ADMIN STAN
+	// =========================
+	admin := apiGroup.Group("/admin")
+
+	// NOTE:
+	// register stan biasanya oleh super admin.
+	// Untuk UKK, endpoint ini boleh ada meski role super_admin belum diaktifkan penuh.
+	admin.POST(
+		"/stan/register",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(), //
+		api.RegisterStan,
+	)
+
+	adminAuth := admin.Group("")
+	adminAuth.Use(api.JWTAuth(), api.RequireRole("admin_stan"))
+	{
+		// ----- menu -----
+		adminAuth.POST("/menus", api.AdminCreateMenu)
+		adminAuth.PUT("/menus/:id", api.AdminUpdateMenu)
+		adminAuth.DELETE("/menus/:id", api.AdminDeleteMenu)
+		adminAuth.GET("/menus", api.AdminListMenus)
+		adminAuth.GET("/menus/:id", api.AdminGetMenu)
+
+		// ----- discount -----
+		adminAuth.PATCH("/discounts", api.AdminCreateDiscount)
+		adminAuth.GET("/discounts", api.AdminListDiscounts)
+		adminAuth.GET("/discounts/:id", api.AdminGetDiscount)
+		adminAuth.PUT("/discounts/:id", api.AdminUpdateDiscount)
+		adminAuth.DELETE("/discounts/:id", api.AdminDeleteDiscount)
+
+		// ----- orders -----
+		adminAuth.GET("/orders", api.AdminOrders)
+		adminAuth.PATCH("/orders/:id/status", api.AdminUpdateOrderStatus)
+
+		// ----- reports -----
+		// adminAuth.GET("/reports/monthly", api.AdminMonthlyReport)
+		adminAuth.GET("/reports/rekap", api.AdminRekapTransaksi)
+	}
+
+	// =========================
+	// SYSTEM (SUPER ADMIN ONLY)
+	// =========================
+	admin.POST(
+		"/system/clear-database",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminClearDatabase,
+	)
+	admin.POST(
+		"/system/import-siswa",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminImportSiswa,
+	)
+	admin.GET(
+		"/system/siswas",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminGetAllSiswas,
+	)
+	admin.GET(
+		"/system/stans",
+		api.JWTAuth(),
+		api.RequireSuperAdmin(),
+		api.AdminGetAllStan,
+)
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\internal\seed\superadmin.go =====
+package seed
+
+import (
+	"log"
+	"os"
+
+	"github.com/samudsamudra/UKK_kantin/internal/app"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func SeedSuperAdmin() {
+	db := app.DB
+
+	email := "root@system.local"
+	password := os.Getenv("SUPERADMIN_PASSWORD")
+
+	if password == "" {
+		log.Println("SUPERADMIN_PASSWORD not set")
+		return
+	}
+
+	var existing app.User
+	if err := db.Where("email = ?", email).First(&existing).Error; err == nil {
+		log.Println("Superadmin already exists, skip seed")
+		return
+	}
+
+	// HASH sesuai login logic
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Println("failed hashing password:", err)
+		return
+	}
+
+	superAdmin := app.User{
+		Email:        email,
+		PasswordHash: string(hash),
+		Role:         app.RoleSuperAdmin,
+	}
+
+	if err := db.Create(&superAdmin).Error; err != nil {
+		log.Println("failed create superadmin:", err)
+		return
+	}
+
+	log.Println("Superadmin seeded successfully")
+}
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\go.mod =====
+module github.com/samudsamudra/UKK_kantin
+
+go 1.25.4
+
+require (
+	github.com/gin-gonic/gin v1.11.0
+	github.com/go-pdf/fpdf v0.9.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/google/uuid v1.6.0
+	github.com/joho/godotenv v1.5.1
+	golang.org/x/crypto v0.40.0
+	gorm.io/driver/mysql v1.6.0
+	gorm.io/gorm v1.31.1
+)
+
+require (
+	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/bytedance/sonic v1.14.0 // indirect
+	github.com/bytedance/sonic/loader v0.3.0 // indirect
+	github.com/cloudwego/base64x v0.1.6 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
+	github.com/gin-contrib/sse v1.1.0 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.27.0 // indirect
+	github.com/go-sql-driver/mysql v1.9.3 // indirect
+	github.com/goccy/go-json v0.10.2 // indirect
+	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/quic-go/qpack v0.5.1 // indirect
+	github.com/quic-go/quic-go v0.54.0 // indirect
+	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/ugorji/go/codec v1.3.0 // indirect
+	go.uber.org/mock v0.5.0 // indirect
+	golang.org/x/arch v0.20.0 // indirect
+	golang.org/x/mod v0.25.0 // indirect
+	golang.org/x/net v0.42.0 // indirect
+	golang.org/x/sync v0.16.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/text v0.27.0 // indirect
+	golang.org/x/tools v0.34.0 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
+)
+
+
+
+===== C:\SMK Telkom Malang 2026\UKK_kantin_Backend\go.sum =====
+filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
+filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
+github.com/bytedance/sonic v1.14.0 h1:/OfKt8HFw0kh2rj8N0F6C/qPGRESq0BbaNZgcNXXzQQ=
+github.com/bytedance/sonic v1.14.0/go.mod h1:WoEbx8WTcFJfzCe0hbmyTGrfjt8PzNEBdxlNUO24NhA=
+github.com/bytedance/sonic/loader v0.3.0 h1:dskwH8edlzNMctoruo8FPTJDF3vLtDT0sXZwvZJyqeA=
+github.com/bytedance/sonic/loader v0.3.0/go.mod h1:N8A3vUdtUebEY2/VQC0MyhYeKUFosQU6FxH2JmUe6VI=
+github.com/cloudwego/base64x v0.1.6 h1:t11wG9AECkCDk5fMSoxmufanudBtJ+/HemLstXDLI2M=
+github.com/cloudwego/base64x v0.1.6/go.mod h1:OFcloc187FXDaYHvrNIjxSe8ncn0OOM8gEHfghB2IPU=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/gabriel-vasile/mimetype v1.4.8 h1:FfZ3gj38NjllZIeJAmMhr+qKL8Wu+nOoI3GqacKw1NM=
+github.com/gabriel-vasile/mimetype v1.4.8/go.mod h1:ByKUIKGjh1ODkGM1asKUbQZOLGrPjydw3hYPU2YU9t8=
+github.com/gin-contrib/sse v1.1.0 h1:n0w2GMuUpWDVp7qSpvze6fAu9iRxJY4Hmj6AmBOU05w=
+github.com/gin-contrib/sse v1.1.0/go.mod h1:hxRZ5gVpWMT7Z0B0gSNYqqsSCNIJMjzvm6fqCz9vjwM=
+github.com/gin-gonic/gin v1.11.0 h1:OW/6PLjyusp2PPXtyxKHU0RbX6I/l28FTdDlae5ueWk=
+github.com/gin-gonic/gin v1.11.0/go.mod h1:+iq/FyxlGzII0KHiBGjuNn4UNENUlKbGlNmc+W50Dls=
+github.com/go-pdf/fpdf v0.9.0 h1:PPvSaUuo1iMi9KkaAn90NuKi+P4gwMedWPHhj8YlJQw=
+github.com/go-pdf/fpdf v0.9.0/go.mod h1:oO8N111TkmKb9D7VvWGLvLJlaZUQVPM+6V42pp3iV4Y=
+github.com/go-playground/assert/v2 v2.2.0 h1:JvknZsQTYeFEAhQwI4qEt9cyV5ONwRHC+lYKSsYSR8s=
+github.com/go-playground/assert/v2 v2.2.0/go.mod h1:VDjEfimB/XKnb+ZQfWdccd7VUvScMdVu0Titje2rxJ4=
+github.com/go-playground/locales v0.14.1 h1:EWaQ/wswjilfKLTECiXz7Rh+3BjFhfDFKv/oXslEjJA=
+github.com/go-playground/locales v0.14.1/go.mod h1:hxrqLVvrK65+Rwrd5Fc6F2O76J/NuW9t0sjnWqG1slY=
+github.com/go-playground/universal-translator v0.18.1 h1:Bcnm0ZwsGyWbCzImXv+pAJnYK9S473LQFuzCbDbfSFY=
+github.com/go-playground/universal-translator v0.18.1/go.mod h1:xekY+UJKNuX9WP91TpwSH2VMlDf28Uj24BCp08ZFTUY=
+github.com/go-playground/validator/v10 v10.27.0 h1:w8+XrWVMhGkxOaaowyKH35gFydVHOvC0/uWoy2Fzwn4=
+github.com/go-playground/validator/v10 v10.27.0/go.mod h1:I5QpIEbmr8On7W0TktmJAumgzX4CA1XNl4ZmDuVHKKo=
+github.com/go-sql-driver/mysql v1.9.3 h1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=
+github.com/go-sql-driver/mysql v1.9.3/go.mod h1:qn46aNg1333BRMNU69Lq93t8du/dwxI64Gl8i5p1WMU=
+github.com/goccy/go-json v0.10.2 h1:CrxCmQqYDkv1z7lO7Wbh2HN93uovUHgrECaO5ZrCXAU=
+github.com/goccy/go-json v0.10.2/go.mod h1:6MelG93GURQebXPDq3khkgXZkazVtN9CRI+MGFi0w8I=
+github.com/goccy/go-yaml v1.18.0 h1:8W7wMFS12Pcas7KU+VVkaiCng+kG8QiFeFwzFb+rwuw=
+github.com/goccy/go-yaml v1.18.0/go.mod h1:XBurs7gK8ATbW4ZPGKgcbrY1Br56PdM69F7LkFRi1kA=
+github.com/golang-jwt/jwt/v5 v5.3.0 h1:pv4AsKCKKZuqlgs5sUmn4x8UlGa0kEVt/puTpKx9vvo=
+github.com/golang-jwt/jwt/v5 v5.3.0/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/jinzhu/inflection v1.0.0 h1:K317FqzuhWc8YvSVlFMCCUb36O/S9MCKRDI7QkRKD/E=
+github.com/jinzhu/inflection v1.0.0/go.mod h1:h+uFLlag+Qp1Va5pdKtLDYj+kHp5pxUVkryuEj+Srlc=
+github.com/jinzhu/now v1.1.5 h1:/o9tlHleP7gOFmsnYNz3RGnqzefHA47wQpKrrdTIwXQ=
+github.com/jinzhu/now v1.1.5/go.mod h1:d3SSVoowX0Lcu0IBviAWJpolVfI5UJVZZ7cO71lE/z8=
+github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
+github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
+github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
+github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
+github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
+github.com/leodido/go-urn v1.4.0 h1:WT9HwE9SGECu3lg4d/dIA+jxlljEa1/ffXKmRjqdmIQ=
+github.com/leodido/go-urn v1.4.0/go.mod h1:bvxc+MVxLKB4z00jd1z+Dvzr47oO32F/QSNjSBOlFxI=
+github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
+github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
+github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 h1:ZqeYNhU3OHLH3mGKHDcjJRFFRrJa6eAM5H+CtDdOsPc=
+github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
+github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
+github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/quic-go/qpack v0.5.1 h1:giqksBPnT/HDtZ6VhtFKgoLOWmlyo9Ei6u9PqzIMbhI=
+github.com/quic-go/qpack v0.5.1/go.mod h1:+PC4XFrEskIVkcLzpEkbLqq1uCoxPhQuvK5rH1ZgaEg=
+github.com/quic-go/quic-go v0.54.0 h1:6s1YB9QotYI6Ospeiguknbp2Znb/jZYjZLRXn9kMQBg=
+github.com/quic-go/quic-go v0.54.0/go.mod h1:e68ZEaCdyviluZmy44P6Iey98v/Wfz6HCjQEm+l8zTY=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
+github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
+github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
+github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
+github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
+github.com/ugorji/go/codec v1.3.0 h1:Qd2W2sQawAfG8XSvzwhBeoGq71zXOC/Q1E9y/wUcsUA=
+github.com/ugorji/go/codec v1.3.0/go.mod h1:pRBVtBSKl77K30Bv8R2P+cLSGaTtex6fsA2Wjqmfxj4=
+go.uber.org/mock v0.5.0 h1:KAMbZvZPyBPWgD14IrIQ38QCyjwpvVVV6K/bHl1IwQU=
+go.uber.org/mock v0.5.0/go.mod h1:ge71pBPLYDk7QIi1LupWxdAykm7KIEFchiOqd6z7qMM=
+golang.org/x/arch v0.20.0 h1:dx1zTU0MAE98U+TQ8BLl7XsJbgze2WnNKF/8tGp/Q6c=
+golang.org/x/arch v0.20.0/go.mod h1:bdwinDaKcfZUGpH09BB7ZmOfhalA8lQdzl62l8gGWsk=
+golang.org/x/crypto v0.40.0 h1:r4x+VvoG5Fm+eJcxMaY8CQM7Lb0l1lsmjGBQ6s8BfKM=
+golang.org/x/crypto v0.40.0/go.mod h1:Qr1vMER5WyS2dfPHAlsOj01wgLbsyWtFn/aY+5+ZdxY=
+golang.org/x/mod v0.25.0 h1:n7a+ZbQKQA/Ysbyb0/6IbB1H/X41mKgbhfv7AfG/44w=
+golang.org/x/mod v0.25.0/go.mod h1:IXM97Txy2VM4PJ3gI61r1YEk/gAj6zAHN3AdZt6S9Ww=
+golang.org/x/net v0.42.0 h1:jzkYrhi3YQWD6MLBJcsklgQsoAcw89EcZbJw8Z614hs=
+golang.org/x/net v0.42.0/go.mod h1:FF1RA5d3u7nAYA4z2TkclSCKh68eSXtiFwcWQpPXdt8=
+golang.org/x/sync v0.16.0 h1:ycBJEhp9p4vXvUZNszeOq0kGTPghopOL8q0fq3vstxw=
+golang.org/x/sync v0.16.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=
+golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.35.0 h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
+golang.org/x/sys v0.35.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
+golang.org/x/text v0.27.0 h1:4fGWRpyh641NLlecmyl4LOe6yDdfaYNrGb2zdfo4JV4=
+golang.org/x/text v0.27.0/go.mod h1:1D28KMCvyooCX9hBiosv5Tz/+YLxj0j7XhWjpSUF7CU=
+golang.org/x/tools v0.34.0 h1:qIpSLOxeCYGg9TrcJokLBG4KFA6d795g0xkBkiESGlo=
+golang.org/x/tools v0.34.0/go.mod h1:pAP9OwEaY1CAW3HOmg3hLZC5Z0CCmzjAF2UQMSqNARg=
+google.golang.org/protobuf v1.36.9 h1:w2gp2mA27hUeUzj9Ex9FBjsBm40zfaDtEWow293U7Iw=
+google.golang.org/protobuf v1.36.9/go.mod h1:fuxRtAxBytpl4zzqUh6/eyUujkJdNiuEkXntxiD/uRU=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+gorm.io/driver/mysql v1.6.0 h1:eNbLmNTpPpTOVZi8MMxCi2aaIm0ZpInbORNXDwyLGvg=
+gorm.io/driver/mysql v1.6.0/go.mod h1:D/oCC2GWK3M/dqoLxnOlaNKmXz8WNTfcS9y5ovaSqKo=
+gorm.io/gorm v1.31.1 h1:7CA8FTFz/gRfgqgpeKIBcervUn3xSyPUmr6B2WXJ7kg=
+gorm.io/gorm v1.31.1/go.mod h1:XyQVbO2k6YkOis7C2437jSit3SsDK72s7n7rsSHd+Gs=
+
+
+
